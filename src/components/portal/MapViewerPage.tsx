@@ -33,6 +33,7 @@ import {
   createLayerFromFile,
   createLayerFromPortalItem,
   createLayerFromUrl,
+  createSampleGeoJsonLayer,
   type AddedLayerInfo,
   type LayerKind,
 } from '../../lib/mapLayers'
@@ -223,7 +224,15 @@ export function MapViewerPage({ onLeave }: MapViewerPageProps) {
         }),
       )
     } catch {
-      /* status already set */
+      // Demo / blocked remote services: still show a visible layer so Browse works.
+      if (mode === 'demo' || !item.url) {
+        try {
+          await runAdd(() => createSampleGeoJsonLayer(item.title || 'Sample layer'))
+          setStatus(`Sample layer toegevoegd (remote laag niet bereikbaar): ${item.title}`)
+        } catch {
+          /* status already set */
+        }
+      }
     }
   }
 
@@ -299,7 +308,18 @@ export function MapViewerPage({ onLeave }: MapViewerPageProps) {
     try {
       await runAdd(() => createLayerFromUrl(url, { kind: urlKind }))
     } catch (err) {
-      setUrlError(err instanceof Error ? err.message : 'Toevoegen mislukt')
+      const message = err instanceof Error ? err.message : 'Toevoegen mislukt'
+      // Retry MapServer URLs as map image if feature guess failed
+      if (urlKind === 'auto' && url.toLowerCase().includes('mapserver')) {
+        try {
+          await runAdd(() => createLayerFromUrl(url, { kind: 'Map Service' }))
+          return
+        } catch (err2) {
+          setUrlError(err2 instanceof Error ? err2.message : message)
+          return
+        }
+      }
+      setUrlError(message)
     }
   }
 
