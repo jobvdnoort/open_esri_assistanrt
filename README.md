@@ -28,7 +28,7 @@ Gebruik dan **OAuth**:
 
 1. In het portaal: **Content → Add item → Application**
 2. Type: Web mapping / Application
-3. Redirect URI: `http://127.0.0.1:5173/` (en eventueel `http://localhost:5173/`)
+3. Redirect URI: `http://127.0.0.1:5174/` (en eventueel `http://localhost:5174/`)
 4. Kopieer de **Client ID** naar het OAuth-tabblad in de app
 5. Klik **Inloggen met portal (OAuth)** — je gaat in hetzelfde tabblad naar de portal-login (incl. SAML) en komt daarna terug
 

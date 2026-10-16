@@ -137,8 +137,8 @@ export function LoginPage() {
               Content → Add item → Application → Redirect URI exact:{' '}
               <code>{redirectUri}</code>
               {redirectUri.includes('127.0.0.1')
-                ? ' (voeg ook http://localhost:5173/ toe als je die URL gebruikt)'
-                : ' (voeg ook http://127.0.0.1:5173/ toe als je die URL gebruikt)'}
+                ? ' (voeg ook http://localhost:5174/ toe als je die URL gebruikt)'
+                : ' (voeg ook http://127.0.0.1:5174/ toe als je die URL gebruikt)'}
               . Na login kom je terug in dit tabblad — geen popup.
             </p>
             {(localError || error) && <p className="form-error">{localError || error}</p>}

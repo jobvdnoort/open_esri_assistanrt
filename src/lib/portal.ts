@@ -16,7 +16,7 @@ export function normalizePortalUrl(input: string): string {
 }
 
 export function getOAuthRedirectUri(): string {
-  if (typeof window === 'undefined') return 'http://127.0.0.1:5173/'
+  if (typeof window === 'undefined') return 'http://127.0.0.1:5174/'
   return `${window.location.origin}/`
 }
 
