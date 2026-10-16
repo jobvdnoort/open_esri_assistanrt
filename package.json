@@ -13,6 +13,7 @@
   "dependencies": {
     "@esri/arcgis-rest-portal": "^4.11.0",
     "@esri/arcgis-rest-request": "^4.11.0",
+    "esri-loader": "^3.7.0",
     "lucide-react": "^1.58.0",
     "react": "^19.2.8",
     "react-dom": "^19.2.8"

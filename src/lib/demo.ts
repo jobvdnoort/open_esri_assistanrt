@@ -44,10 +44,51 @@ export const DEMO_ITEMS: PortalItem[] = [
     created: Date.now() - 1000 * 60 * 60 * 24 * 60,
     modified: Date.now() - 1000 * 60 * 60 * 24,
     access: 'org',
-    snippet: 'Voorbeeld Feature Service item (alleen metadata/JSON).',
-    tags: ['demo', 'bomen'],
+    snippet: 'Sample Feature Layer voor Browse layers.',
+    tags: ['demo', 'bomen', 'layer'],
+    url: 'https://services.arcgis.com/V6ZHFr6zdgNZuVG0/arcgis/rest/services/Landscape_Trees/FeatureServer/0',
+  },
+  {
+    id: 'demo-feature-layer-2',
+    title: 'USA Cities (sample)',
+    type: 'Feature Service',
+    owner: 'demo.user',
+    created: Date.now() - 1000 * 60 * 60 * 24 * 40,
+    modified: Date.now() - 1000 * 60 * 60 * 12,
+    access: 'org',
+    snippet: 'Sample cities feature layer.',
+    tags: ['demo', 'layer'],
+    url: 'https://services.arcgis.com/P3ePLMYs2RVChkJx/arcgis/rest/services/USA_Major_Cities/FeatureServer/0',
+  },
+  {
+    id: 'demo-map-image',
+    title: 'Census MapServer (sample)',
+    type: 'Map Service',
+    owner: 'demo.user',
+    created: Date.now() - 1000 * 60 * 60 * 24 * 50,
+    modified: Date.now() - 1000 * 60 * 60 * 8,
+    access: 'org',
+    snippet: 'Sample map image layer.',
+    tags: ['demo', 'layer'],
     url: 'https://sampleserver6.arcgisonline.com/arcgis/rest/services/Census/MapServer',
   },
+  ...Array.from({ length: 40 }, (_, i) => ({
+    id: `demo-pad-${i + 1}`,
+    title: `Demo item ${String(i + 1).padStart(2, '0')}`,
+    type: i % 3 === 0 ? 'Feature Service' : i % 3 === 1 ? 'Web Map' : 'Map Service',
+    owner: 'demo.user',
+    created: Date.now() - 1000 * 60 * 60 * 24 * (i + 1),
+    modified: Date.now() - 1000 * 60 * 60 * (i + 1),
+    access: 'private' as const,
+    snippet: 'Extra demo item voor paginering.',
+    tags: ['demo', 'page'],
+    url:
+      i % 3 === 0
+        ? 'https://services.arcgis.com/V6ZHFr6zdgNZuVG0/arcgis/rest/services/Landscape_Trees/FeatureServer/0'
+        : i % 3 === 2
+          ? 'https://sampleserver6.arcgisonline.com/arcgis/rest/services/Census/MapServer'
+          : undefined,
+  })),
 ]
 
 const webmapA: WebMapData = {
@@ -169,9 +210,13 @@ const store = new Map<string, unknown>([
   ['demo-feature-layer', structuredClone(featureServiceData)],
 ])
 
-export function demoSearch(query: string, type?: string) {
+export function demoSearch(
+  query: string,
+  type?: string,
+  options?: { start?: number; num?: number },
+) {
   const q = query.trim().toLowerCase()
-  let results = DEMO_ITEMS.filter((item) => {
+  const filtered = DEMO_ITEMS.filter((item) => {
     if (type && item.type !== type) return false
     if (!q) return true
     return (
@@ -180,12 +225,16 @@ export function demoSearch(query: string, type?: string) {
       (item.tags ?? []).some((t) => t.toLowerCase().includes(q))
     )
   })
+  const start = Math.max(1, options?.start ?? 1)
+  const num = Math.max(1, options?.num ?? 30)
+  const slice = filtered.slice(start - 1, start - 1 + num)
+  const nextStart = start - 1 + num < filtered.length ? start + num : -1
   return {
-    total: results.length,
-    start: 1,
-    num: results.length,
-    nextStart: -1,
-    results,
+    total: filtered.length,
+    start,
+    num: slice.length,
+    nextStart,
+    results: slice,
   }
 }
 

@@ -113,22 +113,21 @@ export function PortalBrowser({ onOpenItem, onCompareMaps }: PortalBrowserProps)
     <div className="browser">
       <header className="browser__header">
         <div>
-          <h2>Portaalinhoud</h2>
           <p className="muted">
-            Zoek items, open JSON, of selecteer twee webmaps om te vergelijken.
-            {username ? ` Ingelogd als ${username}.` : ''}
+            {username ? `Ingelogd als ${username}` : 'Content'}
             {portal?.name ? ` · ${portal.name}` : ''}
+            {queryUsed ? ` · ${total} items` : ''}
           </p>
         </div>
         <div className="browser__actions">
           <button
             type="button"
-            className="btn btn--secondary"
+            className="btn btn--primary"
             disabled={selectedWebMaps.length === 0}
             onClick={() => onCompareMaps(selectedWebMaps[0]?.id, selectedWebMaps[1]?.id)}
           >
             <ArrowRightLeft size={16} />
-            Vergelijk webmaps
+            Compare webmaps
             {selectedWebMaps.length > 0 ? ` (${selectedWebMaps.length})` : ''}
           </button>
         </div>

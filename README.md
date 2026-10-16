@@ -1,61 +1,53 @@
 # Open Esri Assistant
 
-Portaal-browser voor ArcGIS Online / Enterprise, geïnspireerd op ArcGIS Assistant — met een extra workflow om **groepen en lagen tussen webmaps te kopiëren zonder JSON te bewerken**.
+Enterprise-portal-achtige interface voor ArcGIS Online / Enterprise: Content, Groups, Organization en Map Viewer — dezelfde navigatie en styling als een echt portaal.
 
-## Wat kun je ermee?
+Edit/compare-workflows (lagen kopiëren tussen webmaps) volgen later; de focus ligt nu op de portal-UI.
 
-- Inloggen op ArcGIS Online of een Enterprise-portal
-- Content zoeken en items openen
-- Item-metadata en item-data JSON bekijken
-- Webmap-lagen als boom bekijken
-- **Twee webmaps naast elkaar openen** en groepen/lagen over en weer kopiëren
-- Wijzigingen terugschrijven naar het portaal (of lokaal in demomodus)
-
-## Snel starten
+## Snel starten (lokaal)
 
 ```bash
+git clone https://github.com/jobvdnoort/open_esri_assistanrt.git
+cd open_esri_assistanrt
+git checkout cursor/esri-portal-ux-6960
 npm install
 npm run dev
 ```
 
-Open de getoonde URL. Kies **Probeer demomodus** om zonder portal te testen, of log in op je portal.
+Open **http://localhost:5174/**. Kies **Probeer demomodus** of log in via OAuth.
 
 ### Inloggen op ArcGIS Enterprise (geen API key)
 
-Username/password werkt alleen voor **ingebouwde** ArcGIS-accounts. Portals met **SAML/SSO** (zoals veel Enterprise-omgevingen) geven anders `COM_0019: Not logged in`.
+Username/password werkt alleen voor **ingebouwde** ArcGIS-accounts. Portals met **SAML/SSO** geven anders `COM_0019`.
 
-Gebruik dan **OAuth**:
+Gebruik **OAuth**:
 
-1. In het portaal: **Content → Add item → Application**
-2. Type: Web mapping / Application
-3. Redirect URI: `http://127.0.0.1:5173/` (en eventueel `http://localhost:5173/`)
-4. Kopieer de **Client ID** naar het OAuth-tabblad in de app
-5. Klik **Inloggen met portal (OAuth)** — je gaat in hetzelfde tabblad naar de portal-login (incl. SAML) en komt daarna terug
+1. Portaal: **Content → Add item → Application**
+2. Redirect URI: `http://127.0.0.1:5174/` (en eventueel `http://localhost:5174/`)
+3. Plak de **Client ID** in het OAuth-tabblad
+4. **Inloggen met portal (OAuth)** — full-page redirect, geen popup
 
-Alternatief: tab **Token** met een handmatig gegenereerde portal-token.
+## Navigatie
 
-## Workflow: groep verplaatsen / kopiëren
-
-1. Ga naar **Inhoud**, selecteer één of twee Web Maps, klik **Vergelijk webmaps**
-2. Of open **Vergelijk** in de navigatie en kies links/rechts een webmap
-3. Selecteer een groep of laag
-4. Klik **→** / **←** (of de knoppen *Links → rechts* / *Rechts → links*)
-5. Optioneel: selecteer op de doelkaart een **groep** om erín te plakken; anders landt de kopie op root-niveau
-6. Klik **Opslaan** op de gewijzigde kant
-
-Layer-`id`s worden automatisch vernieuwd om conflicten te voorkomen.
+| Tab | Inhoud |
+| --- | --- |
+| Home | Eenvoudige landingspagina (later aanpasbaar; login is vóór sessie) |
+| Map | Map Viewer-shell (webmap via ArcGIS JS API) |
+| Groups | My groups / Featured / Organization groups |
+| Content | My content (folders), Favorites, My groups, My organization |
+| Organization | Overview, Members (basis), Status |
 
 ## Scripts
 
 | Command | Beschrijving |
 | --- | --- |
-| `npm run dev` | Development server |
+| `npm run dev` | Development server (poort **5174**) |
 | `npm run build` | Productie-build |
-| `npm test` | Unit tests (webmap helpers) |
+| `npm test` | Unit tests |
 | `npm run lint` | Lint |
 
 ## Tech
 
 - React + Vite + TypeScript
 - [`@esri/arcgis-rest-request`](https://developers.arcgis.com/arcgis-rest-js/) + `@esri/arcgis-rest-portal`
-- Token-login via `ArcGISIdentityManager.signIn`
+- `esri-loader` voor Map Viewer

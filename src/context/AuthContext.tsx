@@ -9,36 +9,17 @@ import {
   type ReactNode,
 } from 'react'
 import { formatAuthError } from '../lib/authErrors'
-import {
-  listUserGroups,
-  searchGroupItems,
-  searchPortalContent,
-  type ContentResult,
-  type ContentScope,
-  type PortalGroup,
-} from '../lib/content'
-import {
-  DEMO_PORTAL,
-  demoGetData,
-  demoGetItem,
-  demoSaveWebMap,
-  demoSearch,
-  resetDemoData,
-} from '../lib/demo'
+import type { ContentResult, ContentScope, PortalFolder, PortalGroup } from '../lib/content'
 import {
   beginPortalOAuth,
   completePortalOAuth,
-  fetchItem,
-  fetchItemData,
-  fetchWebMap,
   getPortalSelf,
   isOAuthCallbackUrl,
   loadOAuthPending,
   normalizePortalUrl,
-  saveWebMapData,
   signInWithPassword,
   signInWithToken,
-} from '../lib/portal'
+} from '../lib/portalAuth'
 import type { PortalItem, PortalSelf, WebMapData } from '../types/arcgis'
 
 const SESSION_KEY = 'oea-session'
@@ -74,8 +55,13 @@ interface AuthContextValue {
     scope: ContentScope
     query?: string
     type?: string
+    folderId?: string | null
+    start?: number
+    num?: number
   }) => Promise<ContentResult>
+  listFolders: () => Promise<PortalFolder[]>
   listGroups: () => Promise<PortalGroup[]>
+  listOrgGroups: (query?: string) => Promise<PortalGroup[]>
   browseGroupItems: (
     groupId: string,
     options?: { query?: string; type?: string },
@@ -125,17 +111,41 @@ function persistPrefs(prefs: LoginPrefs) {
   localStorage.setItem(PREFS_KEY, JSON.stringify(prefs))
 }
 
+function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = window.setTimeout(() => reject(new Error(`${label} timeout na ${ms}ms`)), ms)
+    promise.then(
+      (value) => {
+        window.clearTimeout(timer)
+        resolve(value)
+      },
+      (err) => {
+        window.clearTimeout(timer)
+        reject(err)
+      },
+    )
+  })
+}
+
+function needsBootRestore(): boolean {
+  if (typeof window === 'undefined') return false
+  if (isOAuthCallbackUrl() && loadOAuthPending()) return true
+  const stored = loadStored()
+  return Boolean(stored && (stored.mode === 'demo' || stored.serializedAuth))
+}
+
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [mode, setMode] = useState<SessionMode | null>(null)
   const [auth, setAuth] = useState<ArcGISIdentityManager | null>(null)
   const [portal, setPortal] = useState<PortalSelf | null>(null)
   const [portalUrl, setPortalUrl] = useState('https://www.arcgis.com/sharing/rest')
-  const [loading, setLoading] = useState(true)
+  // Only block the UI when we actually have a session/OAuth callback to restore.
+  const [loading, setLoading] = useState(() => needsBootRestore())
   const [error, setError] = useState<string | null>(null)
   const [loginPrefs, setLoginPrefs] = useState<LoginPrefs>(() => loadPrefs())
 
   const applySession = useCallback(async (manager: ArcGISIdentityManager) => {
-    const self = await getPortalSelf(manager)
+    const self = await withTimeout(getPortalSelf(manager), 8000, 'Portal self')
     setAuth(manager)
     setPortal(self)
     setMode('live')
@@ -152,9 +162,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     ;(async () => {
       // Full-page OAuth return: exchange ?code= once (shared promise), then continue into the app.
       if (isOAuthCallbackUrl() && loadOAuthPending()) {
+        setLoading(true)
         try {
-          const manager = await completePortalOAuth()
-          // Always persist even if this effect instance was cleaned up (StrictMode).
+          const manager = await withTimeout(completePortalOAuth(), 20000, 'OAuth')
           await applySession(manager)
         } catch (err) {
           if (!cancelled) {
@@ -174,22 +184,34 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         return
       }
       if (stored.mode === 'demo') {
-        if (!cancelled) {
-          setMode('demo')
-          setPortal(DEMO_PORTAL)
-          setPortalUrl('demo://local')
-          setLoading(false)
+        try {
+          const { DEMO_PORTAL } = await import('../lib/demo')
+          if (!cancelled) {
+            setMode('demo')
+            setPortal(DEMO_PORTAL)
+            setPortalUrl('demo://local')
+            setLoading(false)
+          }
+        } catch {
+          persist(null)
+          if (!cancelled) {
+            setLoading(false)
+            setError('Demomodus kon niet geladen worden. Log opnieuw in.')
+          }
         }
         return
       }
       if (stored.mode === 'live' && stored.serializedAuth) {
+        setLoading(true)
         try {
           const manager = ArcGISIdentityManager.deserialize(stored.serializedAuth)
           if (cancelled) return
+          // Show app shell quickly; validate token with a hard timeout.
           setAuth(manager)
           setMode('live')
           setPortalUrl(manager.portal)
-          const self = await getPortalSelf(manager)
+          setLoading(false)
+          const self = await withTimeout(getPortalSelf(manager), 6000, 'Portal self')
           if (!cancelled) setPortal(self)
         } catch {
           persist(null)
@@ -197,9 +219,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             setAuth(null)
             setMode(null)
             setPortal(null)
+            setLoading(false)
+            setError('Sessie verlopen of portaal reageert niet. Log opnieuw in.')
           }
-        } finally {
-          if (!cancelled) setLoading(false)
         }
         return
       }
@@ -276,13 +298,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   )
 
   const enterDemo = useCallback(() => {
-    resetDemoData()
-    setAuth(null)
-    setPortal(DEMO_PORTAL)
-    setMode('demo')
-    setPortalUrl('demo://local')
-    setError(null)
-    persist({ mode: 'demo' })
+    void import('../lib/demo').then(({ DEMO_PORTAL, resetDemoData }) => {
+      resetDemoData()
+      setAuth(null)
+      setPortal(DEMO_PORTAL)
+      setMode('demo')
+      setPortalUrl('demo://local')
+      setError(null)
+      persist({ mode: 'demo' })
+    })
   }, [])
 
   const signOut = useCallback(() => {
@@ -294,9 +318,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [])
 
   const browseContentFn = useCallback(
-    async (options: { scope: ContentScope; query?: string; type?: string }) => {
+    async (options: {
+      scope: ContentScope
+      query?: string
+      type?: string
+      folderId?: string | null
+      start?: number
+      num?: number
+    }) => {
       if (mode === 'demo') {
-        const result = demoSearch(options.query ?? '', options.type)
+        const { demoSearch } = await import('../lib/demo')
+        const result = demoSearch(options.query ?? '', options.type, {
+          start: options.start,
+          num: options.num,
+        })
         return {
           results: result.results,
           total: result.total,
@@ -305,10 +340,23 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         }
       }
       if (!auth) throw new Error('Niet ingelogd')
+      const { searchPortalContent } = await import('../lib/content')
       return searchPortalContent(auth, portal, options)
     },
     [auth, mode, portal],
   )
+
+  const listFoldersFn = useCallback(async () => {
+    if (mode === 'demo') {
+      return [
+        { id: 'demo-folder-1', title: 'Project Centrum' },
+        { id: 'demo-folder-2', title: '3D data' },
+      ] satisfies PortalFolder[]
+    }
+    if (!auth) throw new Error('Niet ingelogd')
+    const { listMyFolders } = await import('../lib/content')
+    return listMyFolders(auth)
+  }, [auth, mode])
 
   const listGroupsFn = useCallback(async () => {
     if (mode === 'demo') {
@@ -321,15 +369,40 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           snippet: 'Voorbeeldgroep in demomodus',
           modified: Date.now(),
         },
+        {
+          id: 'demo-group-2',
+          title: '3D Stylen',
+          owner: 'demo.user',
+          access: 'org',
+          snippet: 'Stijlen en symbologie voor 3D scenes',
+          modified: Date.now() - 86400000,
+        },
       ] satisfies PortalGroup[]
     }
     if (!auth) throw new Error('Niet ingelogd')
+    const { listUserGroups } = await import('../lib/content')
     return listUserGroups(auth)
   }, [auth, mode])
+
+  const listOrgGroupsFn = useCallback(
+    async (query?: string) => {
+      if (mode === 'demo') {
+        const groups = await listGroupsFn()
+        if (!query?.trim()) return groups
+        const q = query.toLowerCase()
+        return groups.filter((g) => g.title.toLowerCase().includes(q))
+      }
+      if (!auth) throw new Error('Niet ingelogd')
+      const { listOrgGroups } = await import('../lib/content')
+      return listOrgGroups(auth, portal, { query })
+    },
+    [auth, mode, portal, listGroupsFn],
+  )
 
   const browseGroupItemsFn = useCallback(
     async (groupId: string, options?: { query?: string; type?: string }) => {
       if (mode === 'demo') {
+        const { demoSearch } = await import('../lib/demo')
         const result = demoSearch(options?.query ?? '', options?.type)
         return {
           results: result.results,
@@ -338,6 +411,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         }
       }
       if (!auth) throw new Error('Niet ingelogd')
+      const { searchGroupItems } = await import('../lib/content')
       return searchGroupItems(auth, groupId, options)
     },
     [auth, mode],
@@ -357,8 +431,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const getItemFn = useCallback(
     async (id: string) => {
-      if (mode === 'demo') return demoGetItem(id)
+      if (mode === 'demo') {
+        const { demoGetItem } = await import('../lib/demo')
+        return demoGetItem(id)
+      }
       if (!auth) throw new Error('Niet ingelogd')
+      const { fetchItem } = await import('../lib/portal')
       return fetchItem(auth, id)
     },
     [auth, mode],
@@ -366,8 +444,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const getItemDataFn = useCallback(
     async (id: string) => {
-      if (mode === 'demo') return demoGetData(id)
+      if (mode === 'demo') {
+        const { demoGetData } = await import('../lib/demo')
+        return demoGetData(id)
+      }
       if (!auth) throw new Error('Niet ingelogd')
+      const { fetchItemData } = await import('../lib/portal')
       return fetchItemData(auth, id)
     },
     [auth, mode],
@@ -376,12 +458,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const getWebMapFn = useCallback(
     async (id: string) => {
       if (mode === 'demo') {
+        const { demoGetItem, demoGetData } = await import('../lib/demo')
         return {
           item: demoGetItem(id),
           data: demoGetData(id) as WebMapData,
         }
       }
       if (!auth) throw new Error('Niet ingelogd')
+      const { fetchWebMap } = await import('../lib/portal')
       return fetchWebMap(auth, id)
     },
     [auth, mode],
@@ -390,17 +474,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const saveWebMapFn = useCallback(
     async (id: string, data: WebMapData) => {
       if (mode === 'demo') {
+        const { demoSaveWebMap } = await import('../lib/demo')
         demoSaveWebMap(id, data)
         return
       }
       if (!auth) throw new Error('Niet ingelogd')
+      const { saveWebMapData } = await import('../lib/portal')
       await saveWebMapData(auth, id, data)
     },
     [auth, mode],
   )
 
   const resetDemo = useCallback(() => {
-    resetDemoData()
+    void import('../lib/demo').then(({ resetDemoData }) => resetDemoData())
   }, [])
 
   const value = useMemo<AuthContextValue>(
@@ -419,7 +505,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       enterDemo,
       signOut,
       browseContent: browseContentFn,
+      listFolders: listFoldersFn,
       listGroups: listGroupsFn,
+      listOrgGroups: listOrgGroupsFn,
       browseGroupItems: browseGroupItemsFn,
       searchItems: searchItemsFn,
       getItem: getItemFn,
@@ -443,7 +531,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       enterDemo,
       signOut,
       browseContentFn,
+      listFoldersFn,
       listGroupsFn,
+      listOrgGroupsFn,
       browseGroupItemsFn,
       searchItemsFn,
       getItemFn,

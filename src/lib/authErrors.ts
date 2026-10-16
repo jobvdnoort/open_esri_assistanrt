@@ -52,14 +52,14 @@ export function formatAuthError(err: unknown): string {
       'OAuth PKCE mislukt (code_verifier kwam niet overeen). ' +
       'Probeer opnieuw via “Inloggen met portal (OAuth)”. ' +
       'Gebruik exact dezelfde URL als de redirect URI in de portal-app ' +
-      `(nu: ${typeof window !== 'undefined' ? window.location.origin + '/' : 'http://127.0.0.1:5173/'}).`
+      `(nu: ${typeof window !== 'undefined' ? window.location.origin + '/' : 'http://127.0.0.1:5174/'}).`
     )
   }
 
   if (combined.includes('redirect') && combined.includes('uri')) {
     return (
       'Redirect URI niet toegestaan. Voeg in de portal-app exact deze redirect toe: ' +
-      `${typeof window !== 'undefined' ? window.location.origin + '/' : 'http://127.0.0.1:5173/'}`
+      `${typeof window !== 'undefined' ? window.location.origin + '/' : 'http://127.0.0.1:5174/'}`
     )
   }
 

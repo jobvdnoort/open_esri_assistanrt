@@ -14,10 +14,20 @@ import {
 } from 'lucide-react'
 import { useState, type DragEvent } from 'react'
 import type { LayerNode, LayerPath, OperationalLayer } from '../types/arcgis'
-import { buildLayerTree, canReorder, countDescendants, pathsEqual } from '../lib/webmap'
+import { OEA_DND_MIME, parseDragPayload, serializeDragPayload, type PaneSide } from '../lib/dnd'
+import { buildLayerTree, canReorder, countDescendants, getLayerAtPath, pathsEqual } from '../lib/webmap'
 import { ConfirmDialog } from './ConfirmDialog'
 
 export type DropPosition = 'into' | 'before' | 'after'
+
+export interface TreeDropEvent {
+  position: DropPosition | 'root'
+  targetPath: LayerPath | null
+  payloadPath: LayerPath
+  payloadLayer: OperationalLayer
+  fromSide: PaneSide | 'local'
+  samePane: boolean
+}
 
 interface LayerTreeProps {
   layers: OperationalLayer[]
@@ -26,10 +36,12 @@ interface LayerTreeProps {
   onCopy?: (path: LayerPath) => void
   copyLabel?: string
   emptyLabel?: string
-  /** Enable within-map reorder / move-between-groups. */
   enableReorder?: boolean
+  /** Identifies this tree for cross-pane drag-and-drop. */
+  side?: PaneSide
   onReorder?: (path: LayerPath, direction: -1 | 1) => void
   onMove?: (from: LayerPath, to: LayerPath | null, position: DropPosition | 'root') => void
+  onDropLayer?: (event: TreeDropEvent) => void
   onDelete?: (path: LayerPath) => void
 }
 
@@ -37,9 +49,21 @@ function pathKey(path: LayerPath) {
   return path.join('.')
 }
 
+function resolveDropPosition(
+  e: DragEvent,
+  isGroup: boolean,
+): DropPosition {
+  const rect = (e.currentTarget as HTMLElement).getBoundingClientRect()
+  const ratio = (e.clientY - rect.top) / rect.height
+  if (isGroup && ratio > 0.25 && ratio < 0.75) return 'into'
+  if (ratio < 0.35) return 'before'
+  return 'after'
+}
+
 function NodeRow({
   node,
   layers,
+  side,
   selectedPath,
   onSelect,
   onCopy,
@@ -49,6 +73,7 @@ function NodeRow({
   enableReorder,
   onReorder,
   onMove,
+  onDropLayer,
   onDelete,
   draggingPath,
   setDraggingPath,
@@ -57,6 +82,7 @@ function NodeRow({
 }: {
   node: LayerNode
   layers: OperationalLayer[]
+  side?: PaneSide
   selectedPath: LayerPath | null
   onSelect: (path: LayerPath) => void
   onCopy?: (path: LayerPath) => void
@@ -66,6 +92,7 @@ function NodeRow({
   enableReorder?: boolean
   onReorder?: (path: LayerPath, direction: -1 | 1) => void
   onMove?: (from: LayerPath, to: LayerPath | null, position: DropPosition | 'root') => void
+  onDropLayer?: (event: TreeDropEvent) => void
   onDelete?: (path: LayerPath) => void
   draggingPath: LayerPath | null
   setDraggingPath: (path: LayerPath | null) => void
@@ -84,33 +111,51 @@ function NodeRow({
   const isDropAfter =
     dropTarget && pathsEqual(dropTarget.path, node.path) && dropTarget.position === 'after'
 
+  const dndEnabled = Boolean(enableReorder && (onMove || onDropLayer))
+
   const onDragStart = (e: DragEvent) => {
-    if (!enableReorder || !onMove) return
+    if (!dndEnabled) return
+    const payload = serializeDragPayload({
+      source: side ?? 'local',
+      path: node.path,
+      layer: node.layer,
+      mode: 'move',
+    })
+    e.dataTransfer.setData(OEA_DND_MIME, payload)
     e.dataTransfer.setData('text/plain', pathKey(node.path))
-    e.dataTransfer.effectAllowed = 'move'
+    e.dataTransfer.effectAllowed = 'copyMove'
     setDraggingPath(node.path)
   }
 
   const onDragOver = (e: DragEvent) => {
-    if (!enableReorder || !onMove || !draggingPath) return
-    if (pathsEqual(draggingPath, node.path)) return
+    if (!dndEnabled) return
+    const types = Array.from(e.dataTransfer.types)
+    if (!types.includes(OEA_DND_MIME) && !draggingPath) return
+    if (draggingPath && pathsEqual(draggingPath, node.path)) return
     e.preventDefault()
-    e.dataTransfer.dropEffect = 'move'
-    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect()
-    const y = e.clientY - rect.top
-    const ratio = y / rect.height
-    let position: DropPosition = 'after'
-    if (node.isGroup && ratio > 0.25 && ratio < 0.75) position = 'into'
-    else if (ratio < 0.35) position = 'before'
-    else position = 'after'
-    setDropTarget({ path: node.path, position })
+    e.dataTransfer.dropEffect = types.includes(OEA_DND_MIME) ? 'copy' : 'move'
+    setDropTarget({ path: node.path, position: resolveDropPosition(e, node.isGroup) })
   }
 
   const onDrop = (e: DragEvent) => {
-    if (!enableReorder || !onMove || !draggingPath || !dropTarget) return
+    if (!dndEnabled || !dropTarget || !pathsEqual(dropTarget.path, node.path)) return
     e.preventDefault()
-    if (!pathsEqual(dropTarget.path, node.path)) return
-    onMove(draggingPath, node.path, dropTarget.position)
+    const raw = e.dataTransfer.getData(OEA_DND_MIME)
+    const payload = parseDragPayload(raw)
+
+    if (payload && onDropLayer) {
+      onDropLayer({
+        position: dropTarget.position,
+        targetPath: node.path,
+        payloadPath: payload.path,
+        payloadLayer: payload.layer,
+        fromSide: payload.source,
+        samePane: payload.source === side || payload.source === 'local',
+      })
+    } else if (draggingPath && onMove) {
+      onMove(draggingPath, node.path, dropTarget.position)
+    }
+
     setDraggingPath(null)
     setDropTarget(null)
   }
@@ -129,7 +174,7 @@ function NodeRow({
           .filter(Boolean)
           .join(' ')}
         style={{ paddingLeft: `${0.65 + node.depth * 1.1}rem` }}
-        draggable={Boolean(enableReorder && onMove)}
+        draggable={dndEnabled}
         onDragStart={onDragStart}
         onDragEnd={() => {
           setDraggingPath(null)
@@ -190,28 +235,32 @@ function NodeRow({
           </div>
         )}
 
-        {enableReorder && onMove && node.isGroup && draggingPath && !pathsEqual(draggingPath, node.path) && (
-          <button
-            type="button"
-            className="btn btn--ghost btn--sm"
-            onClick={() => {
-              onMove(draggingPath, node.path, 'into')
-              setDraggingPath(null)
-              setDropTarget(null)
-            }}
-            title="Verplaats hierheen"
-          >
-            <FolderInput size={14} />
-            Hier
-          </button>
-        )}
+        {enableReorder &&
+          onMove &&
+          node.isGroup &&
+          draggingPath &&
+          !pathsEqual(draggingPath, node.path) && (
+            <button
+              type="button"
+              className="btn btn--ghost btn--sm"
+              onClick={() => {
+                onMove(draggingPath, node.path, 'into')
+                setDraggingPath(null)
+                setDropTarget(null)
+              }}
+              title="Verplaats hierheen"
+            >
+              <FolderInput size={14} />
+              Hier
+            </button>
+          )}
 
         {enableReorder && onMove && (
           <button
             type="button"
             className={`btn btn--ghost btn--icon ${isDragging ? 'is-active' : ''}`}
             onClick={() => setDraggingPath(isDragging ? null : node.path)}
-            title="Sleep of markeer om te verplaatsen binnen deze webmap"
+            title="Markeer om te verplaatsen"
           >
             <Move size={14} />
           </button>
@@ -248,6 +297,7 @@ function NodeRow({
               key={pathKey(child.path)}
               node={child}
               layers={layers}
+              side={side}
               selectedPath={selectedPath}
               onSelect={onSelect}
               onCopy={onCopy}
@@ -257,6 +307,7 @@ function NodeRow({
               enableReorder={enableReorder}
               onReorder={onReorder}
               onMove={onMove}
+              onDropLayer={onDropLayer}
               onDelete={onDelete}
               draggingPath={draggingPath}
               setDraggingPath={setDraggingPath}
@@ -278,8 +329,10 @@ export function LayerTree({
   copyLabel = 'Kopieer →',
   emptyLabel = 'Geen operationele lagen',
   enableReorder,
+  side,
   onReorder,
   onMove,
+  onDropLayer,
   onDelete,
 }: LayerTreeProps) {
   const tree = buildLayerTree(layers)
@@ -296,20 +349,11 @@ export function LayerTree({
   )
   const [pendingDelete, setPendingDelete] = useState<LayerPath | null>(null)
 
-  const pendingLayer = pendingDelete ? getLayerFromTree(tree, pendingDelete) : null
-  const pendingDesc =
-    pendingLayer && pendingLayer.isGroup
-      ? countDescendants(pendingLayer.layer)
-      : { layers: 0, groups: 0 }
-
-  const requestDelete = (path: LayerPath) => {
-    setPendingDelete(path)
-  }
-
-  const confirmDelete = () => {
-    if (pendingDelete && onDelete) onDelete(pendingDelete)
-    setPendingDelete(null)
-  }
+  const pendingLayer = pendingDelete ? getLayerAtPath(layers, pendingDelete) : null
+  const pendingIsGroup = pendingLayer
+    ? pendingLayer.layerType === 'GroupLayer' || Array.isArray(pendingLayer.layers)
+    : false
+  const pendingDesc = pendingLayer && pendingIsGroup ? countDescendants(pendingLayer) : { layers: 0, groups: 0 }
 
   const onToggle = (key: string) => {
     setExpanded((prev) => {
@@ -321,25 +365,51 @@ export function LayerTree({
   }
 
   if (tree.length === 0) {
-    return <p className="muted empty-panel">{emptyLabel}</p>
+    return (
+      <div
+        className="layer-tree layer-tree--empty"
+        onDragOver={(e) => {
+          if (!onDropLayer) return
+          if (!Array.from(e.dataTransfer.types).includes(OEA_DND_MIME)) return
+          e.preventDefault()
+          e.dataTransfer.dropEffect = 'copy'
+        }}
+        onDrop={(e) => {
+          if (!onDropLayer) return
+          const payload = parseDragPayload(e.dataTransfer.getData(OEA_DND_MIME))
+          if (!payload) return
+          e.preventDefault()
+          onDropLayer({
+            position: 'root',
+            targetPath: null,
+            payloadPath: payload.path,
+            payloadLayer: payload.layer,
+            fromSide: payload.source,
+            samePane: payload.source === side || payload.source === 'local',
+          })
+        }}
+      >
+        <p className="muted empty-panel">{emptyLabel}</p>
+      </div>
+    )
   }
 
-  const deleteTitle = pendingLayer?.isGroup ? 'Groep verwijderen?' : 'Laag / service verwijderen?'
-  const deleteName = pendingLayer?.layer.title || pendingLayer?.layer.id || 'dit item'
+  const deleteTitle = pendingIsGroup ? 'Groep verwijderen?' : 'Laag / service verwijderen?'
+  const deleteName = pendingLayer?.title || pendingLayer?.id || 'dit item'
   const nestedSummary =
     pendingDesc.layers + pendingDesc.groups > 0
       ? ` Dit verwijdert ook ${pendingDesc.layers} onderliggende laag${pendingDesc.layers === 1 ? '' : 'en'} en ${pendingDesc.groups} geneste groep${pendingDesc.groups === 1 ? '' : 'en'}.`
       : ''
-  const deleteMessage = pendingLayer?.isGroup
+  const deleteMessage = pendingIsGroup
     ? `Weet je zeker dat je de groep “${deleteName}” wilt verwijderen?${nestedSummary} Dit wordt pas definitief na Opslaan.`
-    : `Weet je zeker dat je “${deleteName}” (${pendingLayer?.layer.layerType || 'laag'}) wilt verwijderen uit deze webmap? De service zelf in het portaal blijft bestaan. Dit wordt pas definitief na Opslaan.`
+    : `Weet je zeker dat je “${deleteName}” (${pendingLayer?.layerType || 'laag'}) wilt verwijderen uit deze webmap? De service zelf in het portaal blijft bestaan. Dit wordt pas definitief na Opslaan.`
 
   return (
     <div className="layer-tree">
       {enableReorder && draggingPath && (
         <div className="layer-tree__move-bar">
           <Move size={14} />
-          <span>Verplaatsen… sleep naar een groep of laag, of:</span>
+          <span>Sleep naar een groep/laag, of naar de andere webmap:</span>
           <button
             type="button"
             className="btn btn--secondary btn--sm"
@@ -359,19 +429,13 @@ export function LayerTree({
           </button>
         </div>
       )}
-      <ul
-        className="layer-tree__list layer-tree__list--root"
-        onDragOver={(e) => {
-          if (!enableReorder || !onMove || !draggingPath) return
-          // Allow dropping on empty root area below list via the bar only
-          e.preventDefault()
-        }}
-      >
+      <ul className="layer-tree__list layer-tree__list--root">
         {tree.map((node) => (
           <NodeRow
             key={pathKey(node.path)}
             node={node}
             layers={layers}
+            side={side}
             selectedPath={selectedPath}
             onSelect={onSelect}
             onCopy={onCopy}
@@ -381,7 +445,8 @@ export function LayerTree({
             enableReorder={enableReorder}
             onReorder={onReorder}
             onMove={onMove}
-            onDelete={onDelete ? requestDelete : undefined}
+            onDropLayer={onDropLayer}
+            onDelete={onDelete ? (path) => setPendingDelete(path) : undefined}
             draggingPath={draggingPath}
             setDraggingPath={setDraggingPath}
             dropTarget={dropTarget}
@@ -396,20 +461,12 @@ export function LayerTree({
         message={deleteMessage}
         confirmLabel="Ja, verwijderen"
         cancelLabel="Annuleren"
-        onConfirm={confirmDelete}
+        onConfirm={() => {
+          if (pendingDelete) onDelete?.(pendingDelete)
+          setPendingDelete(null)
+        }}
         onCancel={() => setPendingDelete(null)}
       />
     </div>
   )
-}
-
-function getLayerFromTree(nodes: LayerNode[], path: LayerPath): LayerNode | null {
-  let list = nodes
-  let found: LayerNode | null = null
-  for (const index of path) {
-    found = list[index] ?? null
-    if (!found) return null
-    list = found.children
-  }
-  return found
 }
