@@ -40,27 +40,48 @@ function sortByModified(items: PortalItem[]): PortalItem[] {
   return [...items].sort((a, b) => (b.modified ?? 0) - (a.modified ?? 0))
 }
 
-async function fetchFolderItems(
+async function fetchFolderPage(
   auth: ArcGISIdentityManager,
   owner: string,
-  folderId?: string,
-): Promise<PortalItem[]> {
-  const items: PortalItem[] = []
-  let start = 1
-
-  while (start > 0) {
-    const page = await getUserContent({
-      owner,
-      folderId,
-      start,
-      num: 100,
-      authentication: auth,
-    })
-    items.push(...(page.items as PortalItem[]))
-    start = page.nextStart && page.nextStart > 0 ? page.nextStart : -1
+  options?: { folderId?: string; start?: number; num?: number },
+): Promise<{ items: PortalItem[]; total: number; nextStart: number }> {
+  const page = await getUserContent({
+    owner,
+    folderId: options?.folderId,
+    start: options?.start ?? 1,
+    num: options?.num ?? 60,
+    authentication: auth,
+  })
+  const items = (page.items ?? []) as PortalItem[]
+  return {
+    items,
+    // getUserContent total is not always present; approximate from page
+    total: typeof (page as { total?: number }).total === 'number'
+      ? (page as { total: number }).total
+      : items.length,
+    nextStart: page.nextStart && page.nextStart > 0 ? page.nextStart : -1,
   }
+}
 
-  return items
+function safeFilterQuery(items: PortalItem[], query?: string, type?: string): PortalItem[] {
+  let results = filterByType(items, type)
+  const q = query?.trim().toLowerCase()
+  if (!q) return sortByModified(results)
+  results = results.filter((item) => {
+    const title = (item.title ?? '').toLowerCase()
+    const id = (item.id ?? '').toLowerCase()
+    const itemType = (item.type ?? '').toLowerCase()
+    const snippet = (item.snippet ?? '').toLowerCase()
+    const tags = item.tags ?? []
+    return (
+      title.includes(q) ||
+      id.includes(q) ||
+      itemType.includes(q) ||
+      snippet.includes(q) ||
+      tags.some((t) => (t ?? '').toLowerCase().includes(q))
+    )
+  })
+  return sortByModified(results)
 }
 
 export async function listMyFolders(auth: ArcGISIdentityManager): Promise<PortalFolder[]> {
@@ -78,100 +99,61 @@ export async function listMyFolders(auth: ArcGISIdentityManager): Promise<Portal
   }))
 }
 
-/** List items the signed-in user owns. Pass folderId for one folder; omit for all (root + folders). */
+/**
+ * List items the signed-in user owns — one page at a time.
+ * "All my content" uses portal search (fast). A folder uses getUserContent for that folder only.
+ * Never crawls every folder (that froze Enterprise accounts with thousands of items).
+ */
 export async function listMyContent(
   auth: ArcGISIdentityManager,
-  options?: { type?: string; query?: string; folderId?: string | null },
+  options?: {
+    type?: string
+    query?: string
+    folderId?: string | null
+    start?: number
+    num?: number
+  },
 ): Promise<ContentResult> {
   const username = await auth.getUsername()
+  const start = options?.start ?? 1
+  const num = options?.num ?? 60
 
-  if (options?.folderId) {
-    const folderItems = await fetchFolderItems(auth, username, options.folderId)
-    let results = sortByModified(filterByType(folderItems, options?.type))
-    const q = options?.query?.trim().toLowerCase()
-    if (q) {
-      results = results.filter(
-        (item) =>
-          item.title.toLowerCase().includes(q) ||
-          item.id.toLowerCase().includes(q) ||
-          item.type.toLowerCase().includes(q) ||
-          (item.tags ?? []).some((t) => t.toLowerCase().includes(q)) ||
-          (item.snippet ?? '').toLowerCase().includes(q),
-      )
-    }
+  // Specific folder (or root when folderId === null)
+  if (options?.folderId || options?.folderId === null) {
+    const page = await fetchFolderPage(auth, username, {
+      folderId: options.folderId || undefined,
+      start,
+      num,
+    })
+    const results = safeFilterQuery(page.items, options?.query, options?.type)
     return {
       results,
-      total: results.length,
-      queryUsed: `content/users/${username}/${options.folderId}`,
+      total: options?.query || options?.type ? results.length : Math.max(page.total, results.length),
+      queryUsed:
+        options.folderId === null
+          ? `content/users/${username}`
+          : `content/users/${username}/${options.folderId}`,
       username,
     }
   }
 
-  if (options?.folderId === null) {
-    // Explicit root-only folder
-    const items = await fetchFolderItems(auth, username, undefined)
-    let results = sortByModified(filterByType(items, options?.type))
-    const q = options?.query?.trim().toLowerCase()
-    if (q) {
-      results = results.filter(
-        (item) =>
-          item.title.toLowerCase().includes(q) ||
-          item.id.toLowerCase().includes(q) ||
-          item.type.toLowerCase().includes(q) ||
-          (item.tags ?? []).some((t) => t.toLowerCase().includes(q)) ||
-          (item.snippet ?? '').toLowerCase().includes(q),
-      )
-    }
-    return {
-      results,
-      total: results.length,
-      queryUsed: `content/users/${username}`,
-      username,
-    }
-  }
-
-  const root = await getUserContent({
-    owner: username,
-    start: 1,
-    num: 100,
+  // All my content — search API, single page
+  const parts = [`owner:"${username}"`]
+  if (options?.query?.trim()) parts.push(`(${options.query.trim()})`)
+  if (options?.type) parts.push(`type:"${options.type}"`)
+  const q = parts.join(' AND ')
+  const response = await searchItems({
+    q,
+    start,
+    num,
+    sortField: 'modified',
+    sortOrder: 'desc',
     authentication: auth,
   })
-
-  const items: PortalItem[] = [...(root.items as PortalItem[])]
-  let start = root.nextStart && root.nextStart > 0 ? root.nextStart : -1
-  while (start > 0) {
-    const page = await getUserContent({
-      owner: username,
-      start,
-      num: 100,
-      authentication: auth,
-    })
-    items.push(...(page.items as PortalItem[]))
-    start = page.nextStart && page.nextStart > 0 ? page.nextStart : -1
-  }
-
-  for (const folder of root.folders ?? []) {
-    const folderItems = await fetchFolderItems(auth, username, folder.id)
-    items.push(...folderItems)
-  }
-
-  let results = sortByModified(filterByType(items, options?.type))
-  const q = options?.query?.trim().toLowerCase()
-  if (q) {
-    results = results.filter(
-      (item) =>
-        item.title.toLowerCase().includes(q) ||
-        item.id.toLowerCase().includes(q) ||
-        item.type.toLowerCase().includes(q) ||
-        (item.tags ?? []).some((t) => t.toLowerCase().includes(q)) ||
-        (item.snippet ?? '').toLowerCase().includes(q),
-    )
-  }
-
   return {
-    results,
-    total: results.length,
-    queryUsed: `content/users/${username}` + (options?.type ? ` type:${options.type}` : ''),
+    results: (response.results ?? []) as PortalItem[],
+    total: response.total ?? 0,
+    queryUsed: q,
     username,
   }
 }
@@ -215,31 +197,26 @@ export async function searchPortalContent(
 ): Promise<ContentResult> {
   const username = await auth.getUsername()
   const text = options.query?.trim() ?? ''
+  const start = options.start ?? 1
+  const num = options.num ?? 60
 
   if (options.scope === 'favorites') {
     return listFavoriteContent(auth, { type: options.type, query: options.query })
   }
 
-  if (options.scope === 'mine' && !text) {
-    return listMyContent(auth, {
-      type: options.type,
-      folderId: options.folderId,
-    })
-  }
-
-  if (options.scope === 'mine' && options.folderId !== undefined) {
+  if (options.scope === 'mine') {
     return listMyContent(auth, {
       type: options.type,
       query: options.query,
       folderId: options.folderId,
+      start,
+      num,
     })
   }
 
   const parts: string[] = []
 
-  if (options.scope === 'mine') {
-    parts.push(`owner:"${username}"`)
-  } else if (options.scope === 'org') {
+  if (options.scope === 'org') {
     if (portal?.id) {
       parts.push(`orgid:${portal.id}`)
     } else {
@@ -248,7 +225,6 @@ export async function searchPortalContent(
   }
 
   if (text) {
-    // Free text: match title/tags etc. Keep it simple for Enterprise Lucene.
     parts.push(`(${text})`)
   }
 
@@ -256,7 +232,6 @@ export async function searchPortalContent(
     parts.push(`type:"${options.type}"`)
   }
 
-  // Fallback so we never hit the portal with an empty q (returns everything public / restricted).
   if (parts.length === 0) {
     parts.push(`owner:"${username}"`)
   }
@@ -264,16 +239,16 @@ export async function searchPortalContent(
   const q = parts.join(' AND ')
   const response = await searchItems({
     q,
-    start: options.start ?? 1,
-    num: options.num ?? 100,
+    start,
+    num,
     sortField: 'modified',
     sortOrder: 'desc',
     authentication: auth,
   })
 
   return {
-    results: response.results as PortalItem[],
-    total: response.total,
+    results: (response.results ?? []) as PortalItem[],
+    total: response.total ?? 0,
     queryUsed: q,
     username,
   }
@@ -357,15 +332,15 @@ export async function searchGroupItems(
 
   const response = await searchItems({
     q,
-    num: 100,
+    num: 60,
     sortField: 'modified',
     sortOrder: 'desc',
     authentication: auth,
   })
 
   return {
-    results: response.results as PortalItem[],
-    total: response.total,
+    results: (response.results ?? []) as PortalItem[],
+    total: response.total ?? 0,
     queryUsed: q,
   }
 }

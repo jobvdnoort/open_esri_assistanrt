@@ -84,14 +84,14 @@ export function ContentPage({ tab, onOpenItem, onOpenMap }: ContentPageProps) {
         }
         if (activeGroupId === 'all') {
           const all: PortalItem[] = []
-          for (const group of groupList.slice(0, 8)) {
+          for (const group of groupList.slice(0, 3)) {
             const r = await browseGroupItems(group.id, {
               query: query || undefined,
               type: type || undefined,
             })
-            all.push(...r.results)
+            all.push(...(Array.isArray(r.results) ? r.results.slice(0, 40) : []))
           }
-          setItems(all)
+          setItems(all.filter(Boolean))
           setTotal(all.length)
           return
         }
@@ -99,8 +99,8 @@ export function ContentPage({ tab, onOpenItem, onOpenMap }: ContentPageProps) {
           query: query || undefined,
           type: type || undefined,
         })
-        setItems(result.results)
-        setTotal(result.total)
+        setItems(Array.isArray(result.results) ? result.results.filter(Boolean) : [])
+        setTotal(typeof result.total === 'number' ? result.total : 0)
         return
       }
 
@@ -119,8 +119,8 @@ export function ContentPage({ tab, onOpenItem, onOpenMap }: ContentPageProps) {
         type: type || undefined,
         folderId,
       })
-      setItems(result.results)
-      setTotal(result.total)
+      setItems(Array.isArray(result.results) ? result.results.filter(Boolean) : [])
+      setTotal(typeof result.total === 'number' ? result.total : 0)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Laden mislukt')
       setItems([])
@@ -357,9 +357,9 @@ export function ContentPage({ tab, onOpenItem, onOpenMap }: ContentPageProps) {
               </thead>
               <tbody>
                 {items.map((item) => (
-                  <tr key={item.id}>
+                  <tr key={item.id || item.title}>
                     <td>
-                      <input type="checkbox" aria-label={`Select ${item.title}`} />
+                      <input type="checkbox" aria-label={`Select ${item.title || 'item'}`} />
                     </td>
                     <td>
                       <button
@@ -367,15 +367,15 @@ export function ContentPage({ tab, onOpenItem, onOpenMap }: ContentPageProps) {
                         className="ep-item-title"
                         onClick={() => onOpenItem(item)}
                       >
-                        {item.title}
+                        {item.title || '(untitled)'}
                       </button>
                       <div className="ep-item-type">
-                        <span className={`type-icon ${typeIconClass(item.type)}`} />
-                        {itemTypeLabel(item.type)}
+                        <span className={`type-icon ${typeIconClass(item.type || '')}`} />
+                        {itemTypeLabel(item.type || 'Item')}
                       </div>
                     </td>
                     <td>{formatPortalDate(item.modified)}</td>
-                    {showOwner && <td>{item.owner}</td>}
+                    {showOwner && <td>{item.owner || '—'}</td>}
                     <td className="ep-row-actions">
                       {(item.type === 'Web Map' || item.type === 'Web Scene') && onOpenMap && (
                         <button

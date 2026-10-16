@@ -1,4 +1,5 @@
 import { lazy, Suspense, useState } from 'react'
+import { ErrorBoundary } from './components/ErrorBoundary'
 import { LoginPage } from './components/LoginPage'
 import { PortalChrome, type PortalSection } from './components/portal/PortalChrome'
 import {
@@ -80,7 +81,18 @@ export default function App() {
   }
 
   const openItem = (item: PortalItem) => setView({ name: 'item', itemId: item.id })
-  const openMap = (item: PortalItem) => setView({ name: 'map', itemId: item.id })
+  const openMap = (_item?: PortalItem) => setView({ name: 'map' })
+
+  if (view.name === 'map') {
+    // Full Map Viewer chrome (no portal Content/Groups topnav) — Untitled map by default.
+    return (
+      <ErrorBoundary label="Map">
+        <Suspense fallback={<ViewFallback />}>
+          <MapViewerPage onLeave={() => setView({ name: 'content', tab: 'mine' })} />
+        </Suspense>
+      </ErrorBoundary>
+    )
+  }
 
   if (view.name === 'home') {
     return (
@@ -99,11 +111,7 @@ export default function App() {
             >
               Go to Content
             </button>
-            <button
-              type="button"
-              className="ep-btn ep-btn--outline"
-              onClick={() => setView({ name: 'map' })}
-            >
+            <button type="button" className="ep-btn ep-btn--outline" onClick={() => openMap()}>
               Open Map Viewer
             </button>
           </div>
@@ -112,29 +120,18 @@ export default function App() {
     )
   }
 
-  if (view.name === 'map') {
-    return (
-      <PortalChrome section="map" onNavigate={navigate} title="Map" bare>
-        <Suspense fallback={<ViewFallback />}>
-          <MapViewerPage
-            itemId={view.itemId}
-            onOpenItem={(id) => setView({ name: 'item', itemId: id })}
-          />
-        </Suspense>
-      </PortalChrome>
-    )
-  }
-
   if (view.name === 'item') {
     return (
       <PortalChrome section="content" onNavigate={navigate} title="Content" bare>
-        <Suspense fallback={<ViewFallback />}>
-          <ItemDetailsPage
-            itemId={view.itemId}
-            onBack={() => setView({ name: 'content', tab: 'mine' })}
-            onOpenMap={openMap}
-          />
-        </Suspense>
+        <ErrorBoundary label="Item">
+          <Suspense fallback={<ViewFallback />}>
+            <ItemDetailsPage
+              itemId={view.itemId}
+              onBack={() => setView({ name: 'content', tab: 'mine' })}
+              onOpenMap={() => openMap()}
+            />
+          </Suspense>
+        </ErrorBoundary>
       </PortalChrome>
     )
   }
@@ -149,12 +146,14 @@ export default function App() {
         activeTab={view.tab}
         onTabChange={(id) => setView({ name: 'groups', tab: id as GroupsTab })}
       >
-        <Suspense fallback={<ViewFallback />}>
-          <GroupsPage
-            tab={view.tab}
-            onOpenGroupContent={() => setView({ name: 'content', tab: 'groups' })}
-          />
-        </Suspense>
+        <ErrorBoundary label="Groups">
+          <Suspense fallback={<ViewFallback />}>
+            <GroupsPage
+              tab={view.tab}
+              onOpenGroupContent={() => setView({ name: 'content', tab: 'groups' })}
+            />
+          </Suspense>
+        </ErrorBoundary>
       </PortalChrome>
     )
   }
@@ -169,13 +168,15 @@ export default function App() {
         activeTab={view.tab}
         onTabChange={(id) => setView({ name: 'organization', tab: id as OrgTab })}
       >
-        <Suspense fallback={<ViewFallback />}>
-          <OrganizationPage
-            tab={view.tab}
-            onOpenItem={openItem}
-            onViewAllContent={() => setView({ name: 'content', tab: 'org' })}
-          />
-        </Suspense>
+        <ErrorBoundary label="Organization">
+          <Suspense fallback={<ViewFallback />}>
+            <OrganizationPage
+              tab={view.tab}
+              onOpenItem={openItem}
+              onViewAllContent={() => setView({ name: 'content', tab: 'org' })}
+            />
+          </Suspense>
+        </ErrorBoundary>
       </PortalChrome>
     )
   }
@@ -190,9 +191,11 @@ export default function App() {
       activeTab={view.tab}
       onTabChange={(id) => setView({ name: 'content', tab: id as ContentTab })}
     >
-      <Suspense fallback={<ViewFallback />}>
-        <ContentPage tab={view.tab} onOpenItem={openItem} onOpenMap={openMap} />
-      </Suspense>
+      <ErrorBoundary label="Content">
+        <Suspense fallback={<ViewFallback />}>
+          <ContentPage tab={view.tab} onOpenItem={openItem} onOpenMap={() => openMap()} />
+        </Suspense>
+      </ErrorBoundary>
     </PortalChrome>
   )
 }
