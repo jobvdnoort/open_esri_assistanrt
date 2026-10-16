@@ -160,7 +160,7 @@ export async function listMyContent(
 
 export async function listFavoriteContent(
   auth: ArcGISIdentityManager,
-  options?: { type?: string; query?: string },
+  options?: { type?: string; query?: string; start?: number; num?: number },
 ): Promise<ContentResult> {
   const username = await auth.getUsername()
   const parts = [`owner:"${username}"`, 'typekeywords:"Favorite"']
@@ -169,14 +169,15 @@ export async function listFavoriteContent(
   const q = parts.join(' AND ')
   const response = await searchItems({
     q,
-    num: 100,
+    start: options?.start ?? 1,
+    num: options?.num ?? 30,
     sortField: 'modified',
     sortOrder: 'desc',
     authentication: auth,
   })
   return {
-    results: response.results as PortalItem[],
-    total: response.total,
+    results: (response.results ?? []) as PortalItem[],
+    total: response.total ?? 0,
     queryUsed: q,
     username,
   }
@@ -201,7 +202,12 @@ export async function searchPortalContent(
   const num = options.num ?? 60
 
   if (options.scope === 'favorites') {
-    return listFavoriteContent(auth, { type: options.type, query: options.query })
+    return listFavoriteContent(auth, {
+      type: options.type,
+      query: options.query,
+      start,
+      num,
+    })
   }
 
   if (options.scope === 'mine') {

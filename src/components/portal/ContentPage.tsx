@@ -1,5 +1,6 @@
 import {
   ChevronDown,
+  ChevronLeft,
   ChevronRight,
   Folder,
   LayoutGrid,
@@ -12,10 +13,12 @@ import { useAuth } from '../../context/AuthContext'
 import type { ContentScope, PortalFolder, PortalGroup } from '../../lib/content'
 import type { PortalItem } from '../../types/arcgis'
 import { formatPortalDate, itemTypeLabel, typeIconClass } from './format'
-
 import type { ContentTab } from './tabs'
 
 type FolderKey = 'all' | 'root' | string
+type PageSize = 30 | 50 | 100
+
+const PAGE_SIZES: PageSize[] = [30, 50, 100]
 
 const ITEM_TYPE_FILTERS = [
   { value: '', label: 'All types' },
@@ -33,6 +36,20 @@ interface ContentPageProps {
   onOpenMap?: (item: PortalItem) => void
 }
 
+function pageNumbers(current: number, totalPages: number): (number | '…')[] {
+  if (totalPages <= 7) {
+    return Array.from({ length: totalPages }, (_, i) => i + 1)
+  }
+  const pages: (number | '…')[] = [1]
+  const start = Math.max(2, current - 1)
+  const end = Math.min(totalPages - 1, current + 1)
+  if (start > 2) pages.push('…')
+  for (let i = start; i <= end; i++) pages.push(i)
+  if (end < totalPages - 1) pages.push('…')
+  pages.push(totalPages)
+  return pages
+}
+
 export function ContentPage({ tab, onOpenItem, onOpenMap }: ContentPageProps) {
   const { browseContent, listFolders, listGroups, browseGroupItems, portal } = useAuth()
   const [query, setQuery] = useState('')
@@ -48,6 +65,8 @@ export function ContentPage({ tab, onOpenItem, onOpenMap }: ContentPageProps) {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [typeOpen, setTypeOpen] = useState(true)
+  const [pageSize, setPageSize] = useState<PageSize>(30)
+  const [page, setPage] = useState(1)
 
   const scope: ContentScope =
     tab === 'mine' ? 'mine' : tab === 'favorites' ? 'favorites' : tab === 'org' ? 'org' : 'groups'
@@ -57,7 +76,12 @@ export function ContentPage({ tab, onOpenItem, onOpenMap }: ContentPageProps) {
     setType('')
     setFolderKey('all')
     setActiveGroupId('all')
+    setPage(1)
   }, [tab])
+
+  useEffect(() => {
+    setPage(1)
+  }, [query, type, folderKey, activeGroupId, pageSize])
 
   useEffect(() => {
     if (tab === 'mine') {
@@ -75,6 +99,7 @@ export function ContentPage({ tab, onOpenItem, onOpenMap }: ContentPageProps) {
   const load = useCallback(async () => {
     setLoading(true)
     setError(null)
+    const start = (page - 1) * pageSize + 1
     try {
       if (tab === 'groups') {
         let groupList = groups
@@ -84,23 +109,25 @@ export function ContentPage({ tab, onOpenItem, onOpenMap }: ContentPageProps) {
         }
         if (activeGroupId === 'all') {
           const all: PortalItem[] = []
-          for (const group of groupList.slice(0, 3)) {
+          for (const group of groupList.slice(0, 5)) {
             const r = await browseGroupItems(group.id, {
               query: query || undefined,
               type: type || undefined,
             })
-            all.push(...(Array.isArray(r.results) ? r.results.slice(0, 40) : []))
+            all.push(...(Array.isArray(r.results) ? r.results : []))
           }
-          setItems(all.filter(Boolean))
-          setTotal(all.length)
+          const filtered = all.filter(Boolean)
+          setTotal(filtered.length)
+          setItems(filtered.slice(start - 1, start - 1 + pageSize))
           return
         }
         const result = await browseGroupItems(activeGroupId, {
           query: query || undefined,
           type: type || undefined,
         })
-        setItems(Array.isArray(result.results) ? result.results.filter(Boolean) : [])
-        setTotal(typeof result.total === 'number' ? result.total : 0)
+        const list = Array.isArray(result.results) ? result.results.filter(Boolean) : []
+        setTotal(typeof result.total === 'number' ? result.total : list.length)
+        setItems(list.slice(start - 1, start - 1 + pageSize))
         return
       }
 
@@ -118,6 +145,8 @@ export function ContentPage({ tab, onOpenItem, onOpenMap }: ContentPageProps) {
         query: query || undefined,
         type: type || undefined,
         folderId,
+        start,
+        num: pageSize,
       })
       setItems(Array.isArray(result.results) ? result.results.filter(Boolean) : [])
       setTotal(typeof result.total === 'number' ? result.total : 0)
@@ -136,6 +165,8 @@ export function ContentPage({ tab, onOpenItem, onOpenMap }: ContentPageProps) {
     folderKey,
     activeGroupId,
     groups,
+    page,
+    pageSize,
     browseContent,
     browseGroupItems,
     listGroups,
@@ -168,6 +199,9 @@ export function ContentPage({ tab, onOpenItem, onOpenMap }: ContentPageProps) {
 
   const username = portal?.user?.username || 'My content'
   const showOwner = tab === 'org' || tab === 'groups'
+  const totalPages = Math.max(1, Math.ceil(total / pageSize))
+  const rangeStart = total === 0 ? 0 : (page - 1) * pageSize + 1
+  const rangeEnd = total === 0 ? 0 : Math.min(page * pageSize, total)
 
   return (
     <div className="ep-content">
@@ -322,11 +356,24 @@ export function ContentPage({ tab, onOpenItem, onOpenMap }: ContentPageProps) {
                 {loading
                   ? 'Loading…'
                   : total > 0
-                    ? `1-${Math.min(items.length, total)} of ${total.toLocaleString()}`
+                    ? `${rangeStart}-${rangeEnd} of ${total.toLocaleString()}`
                     : '0 items'}
               </span>
             </div>
             <div className="ep-list-toolbar__right">
+              <label className="ep-page-size">
+                <span>Show</span>
+                <select
+                  value={pageSize}
+                  onChange={(e) => setPageSize(Number(e.target.value) as PageSize)}
+                >
+                  {PAGE_SIZES.map((n) => (
+                    <option key={n} value={n}>
+                      {n}
+                    </option>
+                  ))}
+                </select>
+              </label>
               <button type="button" className="ep-chip is-active">
                 <LayoutGrid size={14} />
                 Table
@@ -345,62 +392,104 @@ export function ContentPage({ tab, onOpenItem, onOpenMap }: ContentPageProps) {
               <div className="ep-spinner" />
             </div>
           ) : (
-            <table className="ep-table">
-              <thead>
-                <tr>
-                  <th className="ep-table__check" />
-                  <th>Title</th>
-                  <th className="ep-table__sort">Modified</th>
-                  {showOwner && <th>Owner</th>}
-                  <th className="ep-table__actions" />
-                </tr>
-              </thead>
-              <tbody>
-                {items.map((item) => (
-                  <tr key={item.id || item.title}>
-                    <td>
-                      <input type="checkbox" aria-label={`Select ${item.title || 'item'}`} />
-                    </td>
-                    <td>
-                      <button
-                        type="button"
-                        className="ep-item-title"
-                        onClick={() => onOpenItem(item)}
-                      >
-                        {item.title || '(untitled)'}
-                      </button>
-                      <div className="ep-item-type">
-                        <span className={`type-icon ${typeIconClass(item.type || '')}`} />
-                        {itemTypeLabel(item.type || 'Item')}
-                      </div>
-                    </td>
-                    <td>{formatPortalDate(item.modified)}</td>
-                    {showOwner && <td>{item.owner || '—'}</td>}
-                    <td className="ep-row-actions">
-                      {(item.type === 'Web Map' || item.type === 'Web Scene') && onOpenMap && (
+            <>
+              <table className="ep-table">
+                <thead>
+                  <tr>
+                    <th className="ep-table__check" />
+                    <th>Title</th>
+                    <th className="ep-table__sort">Modified</th>
+                    {showOwner && <th>Owner</th>}
+                    <th className="ep-table__actions" />
+                  </tr>
+                </thead>
+                <tbody>
+                  {items.map((item) => (
+                    <tr key={item.id || item.title}>
+                      <td>
+                        <input type="checkbox" aria-label={`Select ${item.title || 'item'}`} />
+                      </td>
+                      <td>
                         <button
                           type="button"
-                          className="ep-btn ep-btn--ghost-sm"
-                          onClick={() => onOpenMap(item)}
+                          className="ep-item-title"
+                          onClick={() => onOpenItem(item)}
                         >
-                          Preview
+                          {item.title || '(untitled)'}
                         </button>
-                      )}
-                      <button type="button" className="ep-icon-btn" aria-label="More" disabled>
-                        <MoreHorizontal size={16} />
+                        <div className="ep-item-type">
+                          <span className={`type-icon ${typeIconClass(item.type || '')}`} />
+                          {itemTypeLabel(item.type || 'Item')}
+                        </div>
+                      </td>
+                      <td>{formatPortalDate(item.modified)}</td>
+                      {showOwner && <td>{item.owner || '—'}</td>}
+                      <td className="ep-row-actions">
+                        {(item.type === 'Web Map' || item.type === 'Web Scene') && onOpenMap && (
+                          <button
+                            type="button"
+                            className="ep-btn ep-btn--ghost-sm"
+                            onClick={() => onOpenMap(item)}
+                          >
+                            Preview
+                          </button>
+                        )}
+                        <button type="button" className="ep-icon-btn" aria-label="More" disabled>
+                          <MoreHorizontal size={16} />
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                  {!loading && items.length === 0 && (
+                    <tr>
+                      <td colSpan={showOwner ? 5 : 4} className="ep-empty">
+                        No items found.
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+
+              {total > 0 && (
+                <nav className="ep-pagination" aria-label="Pagination">
+                  <button
+                    type="button"
+                    className="ep-page-btn"
+                    disabled={page <= 1 || loading}
+                    onClick={() => setPage((p) => Math.max(1, p - 1))}
+                    aria-label="Previous page"
+                  >
+                    <ChevronLeft size={16} />
+                  </button>
+                  {pageNumbers(page, totalPages).map((p, idx) =>
+                    p === '…' ? (
+                      <span key={`e-${idx}`} className="ep-page-ellipsis">
+                        …
+                      </span>
+                    ) : (
+                      <button
+                        key={p}
+                        type="button"
+                        className={`ep-page-btn ${page === p ? 'is-active' : ''}`}
+                        onClick={() => setPage(p)}
+                        disabled={loading}
+                      >
+                        {p}
                       </button>
-                    </td>
-                  </tr>
-                ))}
-                {!loading && items.length === 0 && (
-                  <tr>
-                    <td colSpan={showOwner ? 5 : 4} className="ep-empty">
-                      No items found.
-                    </td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
+                    ),
+                  )}
+                  <button
+                    type="button"
+                    className="ep-page-btn"
+                    disabled={page >= totalPages || loading}
+                    onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+                    aria-label="Next page"
+                  >
+                    <ChevronRight size={16} />
+                  </button>
+                </nav>
+              )}
+            </>
           )}
         </section>
       </div>

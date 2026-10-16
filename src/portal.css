@@ -1036,6 +1036,66 @@
   font-size: 0.92rem;
 }
 
+.ep-page-size {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.82rem;
+  color: var(--ep-muted);
+}
+
+.ep-page-size select {
+  border: 1px solid var(--ep-line);
+  background: #fff;
+  border-radius: var(--ep-radius);
+  padding: 0.25rem 0.4rem;
+  font: inherit;
+}
+
+.ep-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.25rem;
+  padding: 0.85rem 1rem 1.25rem;
+  border-top: 1px solid var(--ep-line);
+}
+
+.ep-page-btn {
+  appearance: none;
+  min-width: 32px;
+  height: 32px;
+  border: 0;
+  background: transparent;
+  color: var(--ep-ink);
+  font: inherit;
+  font-size: 0.9rem;
+  cursor: pointer;
+  border-radius: var(--ep-radius);
+  display: inline-grid;
+  place-items: center;
+}
+
+.ep-page-btn:hover:not(:disabled) {
+  background: #f0f0f0;
+}
+
+.ep-page-btn.is-active {
+  color: var(--ep-blue);
+  border-bottom: 2px solid var(--ep-blue);
+  font-weight: 700;
+}
+
+.ep-page-btn:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.ep-page-ellipsis {
+  padding: 0 0.25rem;
+  color: var(--ep-muted);
+}
+
 /* —— Map Viewer (Untitled map) —— */
 .mv {
   min-height: 100vh;
@@ -1315,6 +1375,179 @@
   font-size: 0.7rem;
   color: #666;
   z-index: 2;
+}
+
+.mv-status {
+  margin-left: 0.75rem;
+  font-size: 0.8rem;
+  color: var(--ep-muted);
+  font-weight: 400;
+}
+
+.mv-panel--wide {
+  width: min(380px, 92vw);
+}
+
+.mv-add-split {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.mv-layer-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.mv-layer-list li {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.55rem 0;
+  border-bottom: 1px solid var(--ep-line);
+}
+
+.mv-layer-meta {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+}
+
+.mv-layer-meta strong {
+  font-size: 0.9rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mv-browse-scopes {
+  display: flex;
+  gap: 0.35rem;
+  margin-bottom: 0.65rem;
+}
+
+.mv-browse-scopes button {
+  appearance: none;
+  border: 1px solid var(--ep-line);
+  background: #fff;
+  padding: 0.35rem 0.65rem;
+  font: inherit;
+  font-size: 0.82rem;
+  cursor: pointer;
+  border-radius: var(--ep-radius);
+}
+
+.mv-browse-scopes button.is-active {
+  border-color: var(--ep-blue);
+  background: #e8f2f9;
+  color: var(--ep-blue);
+  font-weight: 600;
+}
+
+.mv-select {
+  width: 100%;
+  margin-bottom: 0.65rem;
+  border: 1px solid var(--ep-line);
+  border-radius: var(--ep-radius);
+  padding: 0.4rem 0.5rem;
+  font: inherit;
+  background: #fff;
+}
+
+.mv-browse-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: calc(100vh - 260px);
+  overflow: auto;
+}
+
+.mv-browse-list li {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.65rem;
+  padding: 0.65rem 0;
+  border-bottom: 1px solid var(--ep-line);
+}
+
+.mv-browse-list strong {
+  font-size: 0.9rem;
+}
+
+.mv-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.45);
+  display: grid;
+  place-items: center;
+  z-index: 40;
+  padding: 1rem;
+}
+
+.mv-modal {
+  width: min(560px, 100%);
+  background: #fff;
+  border-radius: 2px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.25);
+  display: flex;
+  flex-direction: column;
+  max-height: min(90vh, 720px);
+}
+
+.mv-modal header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.85rem 1rem;
+  border-bottom: 1px solid var(--ep-line);
+}
+
+.mv-modal header h2 {
+  margin: 0;
+  font-size: 1.15rem;
+}
+
+.mv-modal__body {
+  padding: 1rem;
+  overflow: auto;
+  display: grid;
+  gap: 0.75rem;
+}
+
+.mv-modal__body label {
+  display: grid;
+  gap: 0.35rem;
+  font-size: 0.88rem;
+  font-weight: 600;
+}
+
+.mv-modal__body input,
+.mv-modal__body select {
+  font: inherit;
+  font-weight: 400;
+  border: 1px solid var(--ep-line);
+  border-radius: var(--ep-radius);
+  padding: 0.55rem 0.65rem;
+}
+
+.mv-modal footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.5rem;
+  padding: 0.85rem 1rem;
+  border-top: 1px solid var(--ep-line);
+}
+
+.mv-drop {
+  border: 2px dashed #c5c5c5;
+  padding: 2rem 1rem;
+  text-align: center;
+  display: grid;
+  gap: 0.65rem;
+  justify-items: center;
 }
 
 @media (max-width: 960px) {

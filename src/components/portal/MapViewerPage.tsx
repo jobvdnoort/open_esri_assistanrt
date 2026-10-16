@@ -5,6 +5,8 @@ import {
   ChevronLeft,
   ChevronRight,
   Code2,
+  Eye,
+  EyeOff,
   FolderOpen,
   Grid3x3,
   Home,
@@ -13,17 +15,29 @@ import {
   Map as MapIcon,
   Maximize2,
   Minus,
+  MoreHorizontal,
   Plus,
   Printer,
   Search,
   Settings,
   Share2,
   Table2,
+  Trash2,
   X,
 } from 'lucide-react'
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useAuth } from '../../context/AuthContext'
-import { initials } from './format'
+import {
+  LAYER_SEARCH_TYPES,
+  addLayerToView,
+  createLayerFromFile,
+  createLayerFromPortalItem,
+  createLayerFromUrl,
+  type AddedLayerInfo,
+  type LayerKind,
+} from '../../lib/mapLayers'
+import type { PortalItem } from '../../types/arcgis'
+import { initials, itemTypeLabel, typeIconClass } from './format'
 
 type LeftPanel =
   | 'layers'
@@ -33,42 +47,72 @@ type LeftPanel =
   | 'bookmarks'
   | 'charts'
   | 'properties'
+  | 'browse'
   | null
 
+type AddModal = 'url' | 'file' | null
+
 interface MapViewerPageProps {
-  /** Optional: open an existing webmap. Omit for new Untitled map. */
   itemId?: string
   onLeave?: () => void
 }
 
+type ViewHandle = {
+  destroy?: () => void
+  goTo?: (t: unknown) => Promise<unknown>
+  zoom?: number
+  map: {
+    add: (layer: unknown) => void
+    remove: (layer: unknown) => void
+    findLayerById?: (id: string) => { visible?: boolean; destroy?: () => void } | null
+  }
+}
+
 /**
- * Map Viewer shell: new unsaved "Untitled map" with basemap only (no layers).
- * Matches ArcGIS Enterprise Map Viewer chrome from the user's screenshots.
+ * Untitled Map Viewer with working Add: Browse layers / URL / file.
  */
-export function MapViewerPage({ itemId, onLeave }: MapViewerPageProps) {
-  const { portal, mode, portalUrl, auth } = useAuth()
+export function MapViewerPage({ onLeave }: MapViewerPageProps) {
+  const { portal, mode, portalUrl, auth, browseContent } = useAuth()
   const [panel, setPanel] = useState<LeftPanel>('layers')
   const [addOpen, setAddOpen] = useState(false)
+  const [addModal, setAddModal] = useState<AddModal>(null)
   const [mapError, setMapError] = useState<string | null>(null)
   const [mapReady, setMapReady] = useState(false)
-  const mapRef = useRef<HTMLDivElement>(null)
-  const viewRef = useRef<{ destroy?: () => void; goTo?: (t: unknown) => Promise<unknown> } | null>(
-    null,
-  )
+  const [added, setAdded] = useState<AddedLayerInfo[]>([])
+  const [busy, setBusy] = useState(false)
+  const [status, setStatus] = useState<string | null>(null)
+
+  // Browse layers state
+  const [browseQuery, setBrowseQuery] = useState('')
+  const [browseScope, setBrowseScope] = useState<'mine' | 'org'>('mine')
+  const [browseType, setBrowseType] = useState('')
+  const [browseResults, setBrowseResults] = useState<PortalItem[]>([])
+  const [browseLoading, setBrowseLoading] = useState(false)
+  const [browseError, setBrowseError] = useState<string | null>(null)
+
+  // URL modal
+  const [urlValue, setUrlValue] = useState('https://')
+  const [urlKind, setUrlKind] = useState<LayerKind>('auto')
+  const [urlError, setUrlError] = useState<string | null>(null)
+
+  // File modal
+  const [fileError, setFileError] = useState<string | null>(null)
+
+  const mapDivRef = useRef<HTMLDivElement>(null)
+  const viewRef = useRef<ViewHandle | null>(null)
+  const layerObjs = useRef<Map<string, unknown>>(new Map())
 
   const displayName = portal?.user?.fullName || portal?.user?.username || 'Gebruiker'
   const username = portal?.user?.username || ''
-  const title = itemId ? 'Web map' : 'Untitled map'
 
   const togglePanel = (id: LeftPanel) => {
     setPanel((prev) => (prev === id ? null : id))
     setAddOpen(false)
   }
 
-  // New map (or optional item): MapView + basemap only — never auto-load a portal WebMap for Map tab.
   useEffect(() => {
     let cancelled = false
-    const container = mapRef.current
+    const container = mapDivRef.current
     if (!container) return
 
     ;(async () => {
@@ -85,7 +129,7 @@ export function MapViewerPage({ itemId, onLeave }: MapViewerPageProps) {
           'esri/Basemap',
         ])
 
-        if (cancelled || !mapRef.current) return
+        if (cancelled || !mapDivRef.current) return
 
         const portalHome = portalUrl?.replace(/\/sharing\/rest\/?$/i, '') || ''
         if (portalHome && mode === 'live') {
@@ -98,20 +142,14 @@ export function MapViewerPage({ itemId, onLeave }: MapViewerPageProps) {
                 ? auth.token
                 : await auth.getToken(portalUrl)
             if (token) {
-              IdentityManager.registerToken({
-                server: portalHome,
-                token,
-              })
+              IdentityManager.registerToken({ server: portalHome, token })
             }
           } catch {
-            /* basemap may still work from public tiles */
+            /* public basemap still ok */
           }
         }
 
         viewRef.current?.destroy?.()
-
-        // Untitled / new map: light topo basemap, no operational layers.
-        // Prefer a simple world topo so we don't depend on org basemap gallery.
         let basemap: unknown = 'topo-vector'
         try {
           basemap = Basemap.fromId('topo-vector')
@@ -121,7 +159,7 @@ export function MapViewerPage({ itemId, onLeave }: MapViewerPageProps) {
 
         const map = new Map({ basemap })
         const view = new MapView({
-          container: mapRef.current,
+          container: mapDivRef.current,
           map,
           center: [5.3, 52.1],
           zoom: 7,
@@ -142,11 +180,165 @@ export function MapViewerPage({ itemId, onLeave }: MapViewerPageProps) {
       cancelled = true
       viewRef.current?.destroy?.()
       viewRef.current = null
+      layerObjs.current.clear()
     }
-  }, [itemId, portalUrl, mode, auth])
+  }, [portalUrl, mode, auth])
+
+  const runAdd = useCallback(
+    async (factory: () => Promise<{ layer: unknown; info: AddedLayerInfo }>) => {
+      const view = viewRef.current
+      if (!view?.map) {
+        setStatus('Kaart is nog niet klaar.')
+        return
+      }
+      setBusy(true)
+      setStatus(null)
+      try {
+        const { layer, info } = await factory()
+        await addLayerToView(view as never, layer as never, true)
+        layerObjs.current.set(info.id, layer)
+        setAdded((prev) => [info, ...prev.filter((p) => p.id !== info.id)])
+        setPanel('layers')
+        setAddModal(null)
+        setAddOpen(false)
+        setStatus(`Toegevoegd: ${info.title}`)
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Laag toevoegen mislukt'
+        setStatus(message)
+        throw err
+      } finally {
+        setBusy(false)
+      }
+    },
+    [],
+  )
+
+  const addFromPortalItem = async (item: PortalItem) => {
+    try {
+      await runAdd(() =>
+        createLayerFromPortalItem(item.id, {
+          title: item.title,
+          url: item.url,
+          type: item.type,
+        }),
+      )
+    } catch {
+      /* status already set */
+    }
+  }
+
+  const openBrowse = () => {
+    setAddOpen(false)
+    setPanel('browse')
+    setBrowseError(null)
+  }
+
+  const openUrl = () => {
+    setAddOpen(false)
+    setAddModal('url')
+    setUrlError(null)
+    setUrlValue('https://')
+    setUrlKind('auto')
+  }
+
+  const openFile = () => {
+    setAddOpen(false)
+    setAddModal('file')
+    setFileError(null)
+  }
+
+  useEffect(() => {
+    if (panel !== 'browse') return
+    let cancelled = false
+    setBrowseLoading(true)
+    setBrowseError(null)
+    void browseContent({
+      scope: browseScope,
+      query: browseQuery || undefined,
+      type: browseType || undefined,
+      num: 40,
+      start: 1,
+    })
+      .then((r) => {
+        if (cancelled) return
+        const layerish = (r.results ?? []).filter((item) => {
+          const t = (item.type || '').toLowerCase()
+          return (
+            t.includes('feature') ||
+            t.includes('map service') ||
+            t.includes('scene') ||
+            t.includes('image') ||
+            t.includes('tile') ||
+            t.includes('layer') ||
+            Boolean(item.url)
+          )
+        })
+        setBrowseResults(browseType ? (r.results ?? []) : layerish.length ? layerish : r.results ?? [])
+      })
+      .catch((err) => {
+        if (!cancelled) {
+          setBrowseError(err instanceof Error ? err.message : 'Zoeken mislukt')
+          setBrowseResults([])
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setBrowseLoading(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [panel, browseScope, browseQuery, browseType, browseContent])
+
+  const submitUrl = async () => {
+    setUrlError(null)
+    const url = urlValue.trim()
+    if (!/^https?:\/\//i.test(url) || url === 'https://') {
+      setUrlError('Vul een geldige http(s) URL in.')
+      return
+    }
+    try {
+      await runAdd(() => createLayerFromUrl(url, { kind: urlKind }))
+    } catch (err) {
+      setUrlError(err instanceof Error ? err.message : 'Toevoegen mislukt')
+    }
+  }
+
+  const submitFile = async (file: File | null) => {
+    setFileError(null)
+    if (!file) {
+      setFileError('Kies een bestand.')
+      return
+    }
+    try {
+      await runAdd(() => createLayerFromFile(file))
+    } catch (err) {
+      setFileError(err instanceof Error ? err.message : 'Bestand laden mislukt')
+    }
+  }
+
+  const removeLayer = (id: string) => {
+    const view = viewRef.current
+    const layer = layerObjs.current.get(id)
+    if (view?.map && layer) {
+      try {
+        view.map.remove(layer)
+      } catch {
+        /* ignore */
+      }
+    }
+    layerObjs.current.delete(id)
+    setAdded((prev) => prev.filter((l) => l.id !== id))
+  }
+
+  const toggleVisibility = (id: string) => {
+    const layer = layerObjs.current.get(id) as { visible?: boolean } | undefined
+    if (!layer) return
+    layer.visible = !layer.visible
+    setAdded((prev) => [...prev])
+  }
 
   const zoom = async (delta: number) => {
-    const view = viewRef.current as { zoom?: number; goTo?: (t: unknown) => Promise<unknown> } | null
+    const view = viewRef.current
     if (!view?.goTo || view.zoom == null) return
     try {
       await view.goTo({ zoom: view.zoom + delta })
@@ -174,7 +366,8 @@ export function MapViewerPage({ itemId, onLeave }: MapViewerPageProps) {
               <List size={18} />
             </button>
           )}
-          <strong>{title}</strong>
+          <strong>Untitled map</strong>
+          {status && <span className="mv-status">{status}</span>}
         </div>
         <div className="mv-top__right">
           <button type="button" className="mv-icon-btn" disabled aria-label="Notifications">
@@ -201,7 +394,7 @@ export function MapViewerPage({ itemId, onLeave }: MapViewerPageProps) {
           <div className="mv-rail__add-wrap">
             <button
               type="button"
-              className={addOpen ? 'is-active' : ''}
+              className={addOpen || addModal || panel === 'browse' ? 'is-active' : ''}
               title="Add"
               onClick={() => {
                 setAddOpen((v) => !v)
@@ -212,13 +405,13 @@ export function MapViewerPage({ itemId, onLeave }: MapViewerPageProps) {
             </button>
             {addOpen && (
               <div className="mv-flyout">
-                <button type="button" disabled>
+                <button type="button" onClick={openBrowse}>
                   <Search size={14} /> Browse layers
                 </button>
-                <button type="button" disabled>
+                <button type="button" onClick={openUrl}>
                   <MapIcon size={14} /> Add layer from URL
                 </button>
-                <button type="button" disabled>
+                <button type="button" onClick={openFile}>
                   <FolderOpen size={14} /> Add layer from file
                 </button>
                 <button type="button" disabled>
@@ -306,10 +499,11 @@ export function MapViewerPage({ itemId, onLeave }: MapViewerPageProps) {
         </aside>
 
         {panel && (
-          <aside className="mv-panel">
+          <aside className={`mv-panel ${panel === 'browse' ? 'mv-panel--wide' : ''}`}>
             <header>
               <h2>
                 {panel === 'layers' && 'Layers'}
+                {panel === 'browse' && 'Browse layers'}
                 {panel === 'tables' && 'Tables'}
                 {panel === 'basemap' && 'Basemap'}
                 {panel === 'legend' && 'Legend'}
@@ -323,57 +517,173 @@ export function MapViewerPage({ itemId, onLeave }: MapViewerPageProps) {
             </header>
 
             {panel === 'layers' && (
-              <div className="mv-panel__empty">
-                <Layers size={48} strokeWidth={1} />
-                <p>Add layers to your map and they will appear here.</p>
-                <button
-                  type="button"
-                  className="ep-btn ep-btn--outline"
-                  onClick={() => setAddOpen(true)}
+              <>
+                {added.length === 0 ? (
+                  <div className="mv-panel__empty">
+                    <Layers size={48} strokeWidth={1} />
+                    <p>Add layers to your map and they will appear here.</p>
+                    <div className="mv-add-split">
+                      <button
+                        type="button"
+                        className="ep-btn ep-btn--outline"
+                        onClick={() => setAddOpen(true)}
+                      >
+                        <Layers size={14} />
+                        Add
+                      </button>
+                      <button
+                        type="button"
+                        className="ep-btn ep-btn--outline"
+                        onClick={openBrowse}
+                      >
+                        Browse
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="mv-panel__body">
+                    <div className="mv-add-split" style={{ marginBottom: '0.75rem' }}>
+                      <button type="button" className="ep-btn ep-btn--outline" onClick={() => setAddOpen(true)}>
+                        Add
+                      </button>
+                      <button type="button" className="ep-btn ep-btn--outline" onClick={openBrowse}>
+                        Browse
+                      </button>
+                    </div>
+                    <ul className="mv-layer-list">
+                      {added.map((lyr) => {
+                        const obj = layerObjs.current.get(lyr.id) as { visible?: boolean } | undefined
+                        const visible = obj?.visible !== false
+                        return (
+                          <li key={lyr.id}>
+                            <button
+                              type="button"
+                              className="mv-icon-btn"
+                              title={visible ? 'Hide' : 'Show'}
+                              onClick={() => toggleVisibility(lyr.id)}
+                            >
+                              {visible ? <Eye size={14} /> : <EyeOff size={14} />}
+                            </button>
+                            <div className="mv-layer-meta">
+                              <strong>{lyr.title}</strong>
+                              <span className="muted">{lyr.kind}</span>
+                            </div>
+                            <button
+                              type="button"
+                              className="mv-icon-btn"
+                              title="Remove"
+                              onClick={() => removeLayer(lyr.id)}
+                            >
+                              <Trash2 size={14} />
+                            </button>
+                          </li>
+                        )
+                      })}
+                    </ul>
+                  </div>
+                )}
+              </>
+            )}
+
+            {panel === 'browse' && (
+              <div className="mv-panel__body">
+                <div className="mv-browse-scopes">
+                  <button
+                    type="button"
+                    className={browseScope === 'mine' ? 'is-active' : ''}
+                    onClick={() => setBrowseScope('mine')}
+                  >
+                    My content
+                  </button>
+                  <button
+                    type="button"
+                    className={browseScope === 'org' ? 'is-active' : ''}
+                    onClick={() => setBrowseScope('org')}
+                  >
+                    My organization
+                  </button>
+                </div>
+                <label className="ep-search ep-search--sm" style={{ margin: '0 0 0.65rem' }}>
+                  <Search size={14} />
+                  <input
+                    value={browseQuery}
+                    onChange={(e) => setBrowseQuery(e.target.value)}
+                    placeholder="Search layers"
+                  />
+                </label>
+                <select
+                  className="mv-select"
+                  value={browseType}
+                  onChange={(e) => setBrowseType(e.target.value)}
                 >
-                  <Layers size={14} />
-                  Add
-                </button>
+                  {LAYER_SEARCH_TYPES.map((t) => (
+                    <option key={t.value || 'all'} value={t.value}>
+                      {t.label}
+                    </option>
+                  ))}
+                </select>
+                {browseError && <p className="form-error">{browseError}</p>}
+                {browseLoading ? (
+                  <div className="ep-spinner-wrap">
+                    <div className="ep-spinner" />
+                  </div>
+                ) : (
+                  <ul className="mv-browse-list">
+                    {browseResults.map((item) => (
+                      <li key={item.id}>
+                        <div>
+                          <strong>{item.title}</strong>
+                          <div className="ep-item-type">
+                            <span className={`type-icon ${typeIconClass(item.type || '')}`} />
+                            {itemTypeLabel(item.type || 'Layer')}
+                          </div>
+                          <div className="muted">{item.owner}</div>
+                        </div>
+                        <button
+                          type="button"
+                          className="ep-btn ep-btn--outline"
+                          disabled={busy || !mapReady}
+                          onClick={() => void addFromPortalItem(item)}
+                        >
+                          + Add
+                        </button>
+                      </li>
+                    ))}
+                    {browseResults.length === 0 && (
+                      <li className="muted">Geen lagen gevonden. Probeer een andere zoekterm.</li>
+                    )}
+                  </ul>
+                )}
               </div>
             )}
+
             {panel === 'tables' && (
               <div className="mv-panel__empty">
                 <Table2 size={48} strokeWidth={1} />
                 <p>Add tables to your map and they will appear here.</p>
-                <button type="button" className="ep-btn ep-btn--outline" disabled>
-                  Add table
-                </button>
               </div>
             )}
             {panel === 'basemap' && (
               <div className="mv-panel__body">
                 <p className="muted">Current basemap</p>
                 <div className="mv-basemap-current">Topo (vector)</div>
-                <p className="ep-side-muted">Org basemap gallery komt later.</p>
               </div>
             )}
             {panel === 'legend' && (
               <div className="mv-panel__empty">
-                <p>No legend</p>
+                <p>{added.length ? 'Legend volgt als lagen geladen zijn.' : 'No legend'}</p>
               </div>
             )}
             {panel === 'bookmarks' && (
               <div className="mv-panel__empty">
                 <BookMarked size={48} strokeWidth={1} />
                 <p>No bookmarks</p>
-                <p className="muted">Add bookmarks to your map and they will appear here.</p>
-                <button type="button" className="ep-btn ep-btn--outline" disabled>
-                  + Add bookmark
-                </button>
               </div>
             )}
             {panel === 'charts' && (
               <div className="mv-panel__empty">
                 <BarChart3 size={48} strokeWidth={1} />
-                <p>
-                  To add charts, select a layer or table in your map and then click Configure charts
-                  on the Settings toolbar.
-                </p>
+                <p>Select a layer to configure charts (later).</p>
               </div>
             )}
             {panel === 'properties' && (
@@ -384,22 +694,13 @@ export function MapViewerPage({ itemId, onLeave }: MapViewerPageProps) {
                 <label className="mv-toggle">
                   <input type="checkbox" disabled /> Preserve map scale
                 </label>
-                <p className="muted" style={{ marginTop: '1rem' }}>
-                  Time zone
-                </p>
-                <label className="mv-radio">
-                  <input type="radio" name="tz" defaultChecked disabled /> Device time zone
-                </label>
-                <label className="mv-radio">
-                  <input type="radio" name="tz" disabled /> Specific time zone
-                </label>
               </div>
             )}
           </aside>
         )}
 
         <div className="mv-stage">
-          <div ref={mapRef} className="mv-canvas" />
+          <div ref={mapDivRef} className="mv-canvas" />
           {!mapReady && !mapError && (
             <div className="mv-placeholder">
               <div className="ep-spinner" />
@@ -409,7 +710,6 @@ export function MapViewerPage({ itemId, onLeave }: MapViewerPageProps) {
           {mapError && (
             <div className="mv-placeholder">
               <p className="form-error">{mapError}</p>
-              <p className="muted">UI blijft beschikbaar; basemap kon niet starten.</p>
             </div>
           )}
           <div className="mv-tools">
@@ -433,8 +733,8 @@ export function MapViewerPage({ itemId, onLeave }: MapViewerPageProps) {
         </div>
 
         <aside className="mv-rail mv-rail--light">
-          <button type="button" disabled title="Properties">
-            <Settings size={16} />
+          <button type="button" disabled title="More">
+            <MoreHorizontal size={16} />
           </button>
           <div className="mv-rail__spacer" />
           <button type="button" title="Collapse" disabled>
@@ -442,6 +742,105 @@ export function MapViewerPage({ itemId, onLeave }: MapViewerPageProps) {
           </button>
         </aside>
       </div>
+
+      {addModal === 'url' && (
+        <div className="mv-modal-backdrop" role="presentation" onClick={() => setAddModal(null)}>
+          <div
+            className="mv-modal"
+            role="dialog"
+            aria-labelledby="add-url-title"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <header>
+              <h2 id="add-url-title">Add Layer</h2>
+              <button type="button" className="mv-icon-btn" onClick={() => setAddModal(null)}>
+                <X size={16} />
+              </button>
+            </header>
+            <div className="mv-modal__body">
+              <label>
+                URL
+                <input
+                  value={urlValue}
+                  onChange={(e) => setUrlValue(e.target.value)}
+                  placeholder="https://"
+                />
+              </label>
+              <p className="muted">
+                Supported: Feature Service, Map Service, CSV, GeoJSON, WMS, WMTS, ArcGIS Server web
+                service.
+              </p>
+              <label>
+                Type
+                <select value={urlKind} onChange={(e) => setUrlKind(e.target.value as LayerKind)}>
+                  <option value="auto">Select layer type (auto)</option>
+                  <option value="Feature Service">Feature layer</option>
+                  <option value="Map Service">Map image layer</option>
+                  <option value="CSV">CSV</option>
+                  <option value="GeoJSON">GeoJSON</option>
+                  <option value="WMS">WMS</option>
+                  <option value="WMTS">WMTS</option>
+                </select>
+              </label>
+              {urlError && <p className="form-error">{urlError}</p>}
+            </div>
+            <footer>
+              <button type="button" className="ep-btn ep-btn--outline" onClick={() => setAddModal(null)}>
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="ep-btn ep-btn--primary"
+                disabled={busy || !mapReady}
+                onClick={() => void submitUrl()}
+              >
+                {busy ? 'Adding…' : 'Next'}
+              </button>
+            </footer>
+          </div>
+        </div>
+      )}
+
+      {addModal === 'file' && (
+        <div className="mv-modal-backdrop" role="presentation" onClick={() => setAddModal(null)}>
+          <div
+            className="mv-modal"
+            role="dialog"
+            aria-labelledby="add-file-title"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <header>
+              <h2 id="add-file-title">Add Layer</h2>
+              <button type="button" className="mv-icon-btn" onClick={() => setAddModal(null)}>
+                <X size={16} />
+              </button>
+            </header>
+            <div className="mv-modal__body">
+              <div className="mv-drop">
+                <p>
+                  <strong>Drag and drop your file or choose an option</strong>
+                </p>
+                <p className="muted">Supported file types: CSV, GeoJSON</p>
+                <label className="ep-btn ep-btn--outline">
+                  Your device
+                  <input
+                    type="file"
+                    accept=".csv,.geojson,.json,application/geo+json,text/csv"
+                    hidden
+                    onChange={(e) => void submitFile(e.target.files?.[0] ?? null)}
+                  />
+                </label>
+              </div>
+              {fileError && <p className="form-error">{fileError}</p>}
+            </div>
+            <footer>
+              <button type="button" className="ep-btn ep-btn--outline" onClick={() => setAddModal(null)}>
+                Cancel
+              </button>
+            </footer>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

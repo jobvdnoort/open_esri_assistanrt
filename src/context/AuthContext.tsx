@@ -56,6 +56,8 @@ interface AuthContextValue {
     query?: string
     type?: string
     folderId?: string | null
+    start?: number
+    num?: number
   }) => Promise<ContentResult>
   listFolders: () => Promise<PortalFolder[]>
   listGroups: () => Promise<PortalGroup[]>
@@ -321,10 +323,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       query?: string
       type?: string
       folderId?: string | null
+      start?: number
+      num?: number
     }) => {
       if (mode === 'demo') {
         const { demoSearch } = await import('../lib/demo')
-        const result = demoSearch(options.query ?? '', options.type)
+        const result = demoSearch(options.query ?? '', options.type, {
+          start: options.start,
+          num: options.num,
+        })
         return {
           results: result.results,
           total: result.total,
