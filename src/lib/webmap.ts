@@ -36,6 +36,17 @@ export function cloneLayerDeep<T>(value: T): T {
   return structuredClone(value)
 }
 
+export function pathsEqual(a: LayerPath | null | undefined, b: LayerPath | null | undefined): boolean {
+  if (!a || !b || a.length !== b.length) return false
+  return a.every((v, i) => v === b[i])
+}
+
+/** True if `ancestor` is a strict prefix of `path` (moving a group into itself). */
+export function isAncestorPath(ancestor: LayerPath, path: LayerPath): boolean {
+  if (ancestor.length >= path.length) return false
+  return ancestor.every((v, i) => v === path[i])
+}
+
 /** Regenerate layer ids so pasted layers don't collide with existing ones. */
 export function regenerateLayerIds(layer: OperationalLayer): OperationalLayer {
   const clone = cloneLayerDeep(layer)
@@ -54,14 +65,32 @@ export function regenerateLayerIds(layer: OperationalLayer): OperationalLayer {
   return clone
 }
 
+/**
+ * After removing `fromPath`, adjust `targetPath` indices that shifted.
+ */
+export function adjustPathAfterRemoval(fromPath: LayerPath, targetPath: LayerPath): LayerPath {
+  const depth = fromPath.length - 1
+  if (depth < 0) return targetPath
+  if (targetPath.length <= depth) return targetPath
+  if (!fromPath.slice(0, depth).every((v, i) => v === targetPath[i])) return targetPath
+  if (targetPath[depth] > fromPath[depth]) {
+    const next = [...targetPath]
+    next[depth] -= 1
+    return next
+  }
+  return targetPath
+}
+
 export function insertLayer(
   layers: OperationalLayer[],
   layer: OperationalLayer,
   targetPath: LayerPath | null,
   position: 'into' | 'before' | 'after' | 'root' = 'root',
+  options?: { regenerateIds?: boolean },
 ): OperationalLayer[] {
   const next = cloneLayerDeep(layers)
-  const toInsert = regenerateLayerIds(layer)
+  const toInsert =
+    options?.regenerateIds === false ? cloneLayerDeep(layer) : regenerateLayerIds(layer)
 
   if (position === 'root' || !targetPath || targetPath.length === 0) {
     next.push(toInsert)
@@ -121,19 +150,51 @@ export function moveLayer(
 ): OperationalLayer[] {
   const source = getLayerAtPath(layers, fromPath)
   if (!source) return layers
-  const without = removeLayerAtPath(layers, fromPath)
-  // Adjust target path if removal shifts indices in the same parent
-  let adjustedTarget = toPath
-  if (toPath && pathsShareParent(fromPath, toPath) && fromPath[fromPath.length - 1] < toPath[toPath.length - 1]) {
-    adjustedTarget = [...toPath]
-    adjustedTarget[adjustedTarget.length - 1] -= 1
+
+  if (toPath && (pathsEqual(fromPath, toPath) || isAncestorPath(fromPath, toPath))) {
+    return layers
   }
-  return insertLayer(without, source, adjustedTarget, position)
+
+  const without = removeLayerAtPath(layers, fromPath)
+  const adjustedTarget =
+    toPath && toPath.length > 0 ? adjustPathAfterRemoval(fromPath, toPath) : toPath
+
+  return insertLayer(without, source, adjustedTarget, position, { regenerateIds: false })
 }
 
-function pathsShareParent(a: LayerPath, b: LayerPath): boolean {
-  if (a.length !== b.length) return false
-  return a.slice(0, -1).every((v, i) => v === b[i])
+/** Move one step up/down among siblings. */
+export function reorderSibling(
+  layers: OperationalLayer[],
+  path: LayerPath,
+  direction: -1 | 1,
+): OperationalLayer[] {
+  if (path.length === 0) return layers
+  const next = cloneLayerDeep(layers)
+  const parentPath = path.slice(0, -1)
+  const index = path[path.length - 1]
+  const siblings =
+    parentPath.length === 0 ? next : getLayerAtPath(next, parentPath)?.layers
+  if (!siblings) return layers
+
+  const target = index + direction
+  if (target < 0 || target >= siblings.length) return layers
+  ;[siblings[index], siblings[target]] = [siblings[target], siblings[index]]
+  return next
+}
+
+export function canReorder(
+  layers: OperationalLayer[],
+  path: LayerPath,
+  direction: -1 | 1,
+): boolean {
+  if (path.length === 0) return false
+  const parentPath = path.slice(0, -1)
+  const index = path[path.length - 1]
+  const siblings =
+    parentPath.length === 0 ? layers : getLayerAtPath(layers, parentPath)?.layers
+  if (!siblings) return false
+  const target = index + direction
+  return target >= 0 && target < siblings.length
 }
 
 export function countLayers(layers: OperationalLayer[] = []): { layers: number; groups: number } {

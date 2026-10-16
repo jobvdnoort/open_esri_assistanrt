@@ -1,15 +1,21 @@
 import {
+  ArrowDown,
+  ArrowUp,
   ChevronDown,
   ChevronRight,
   Copy,
   Eye,
   EyeOff,
   Folder,
+  FolderInput,
   Layers,
+  Move,
 } from 'lucide-react'
-import { useState } from 'react'
+import { useState, type DragEvent } from 'react'
 import type { LayerNode, LayerPath, OperationalLayer } from '../types/arcgis'
-import { buildLayerTree } from '../lib/webmap'
+import { buildLayerTree, canReorder, pathsEqual } from '../lib/webmap'
+
+export type DropPosition = 'into' | 'before' | 'after'
 
 interface LayerTreeProps {
   layers: OperationalLayer[]
@@ -18,6 +24,10 @@ interface LayerTreeProps {
   onCopy?: (path: LayerPath) => void
   copyLabel?: string
   emptyLabel?: string
+  /** Enable within-map reorder / move-between-groups. */
+  enableReorder?: boolean
+  onReorder?: (path: LayerPath, direction: -1 | 1) => void
+  onMove?: (from: LayerPath, to: LayerPath | null, position: DropPosition | 'root') => void
 }
 
 function pathKey(path: LayerPath) {
@@ -26,31 +36,105 @@ function pathKey(path: LayerPath) {
 
 function NodeRow({
   node,
+  layers,
   selectedPath,
   onSelect,
   onCopy,
   copyLabel,
   expanded,
   onToggle,
+  enableReorder,
+  onReorder,
+  onMove,
+  draggingPath,
+  setDraggingPath,
+  dropTarget,
+  setDropTarget,
 }: {
   node: LayerNode
+  layers: OperationalLayer[]
   selectedPath: LayerPath | null
   onSelect: (path: LayerPath) => void
   onCopy?: (path: LayerPath) => void
   copyLabel?: string
   expanded: Set<string>
   onToggle: (key: string) => void
+  enableReorder?: boolean
+  onReorder?: (path: LayerPath, direction: -1 | 1) => void
+  onMove?: (from: LayerPath, to: LayerPath | null, position: DropPosition | 'root') => void
+  draggingPath: LayerPath | null
+  setDraggingPath: (path: LayerPath | null) => void
+  dropTarget: { path: LayerPath; position: DropPosition } | null
+  setDropTarget: (value: { path: LayerPath; position: DropPosition } | null) => void
 }) {
   const key = pathKey(node.path)
   const isOpen = expanded.has(key)
   const selected = selectedPath && pathKey(selectedPath) === key
   const visible = node.layer.visibility !== false
+  const isDragging = draggingPath && pathsEqual(draggingPath, node.path)
+  const isDropInto =
+    dropTarget && pathsEqual(dropTarget.path, node.path) && dropTarget.position === 'into'
+  const isDropBefore =
+    dropTarget && pathsEqual(dropTarget.path, node.path) && dropTarget.position === 'before'
+  const isDropAfter =
+    dropTarget && pathsEqual(dropTarget.path, node.path) && dropTarget.position === 'after'
+
+  const onDragStart = (e: DragEvent) => {
+    if (!enableReorder || !onMove) return
+    e.dataTransfer.setData('text/plain', pathKey(node.path))
+    e.dataTransfer.effectAllowed = 'move'
+    setDraggingPath(node.path)
+  }
+
+  const onDragOver = (e: DragEvent) => {
+    if (!enableReorder || !onMove || !draggingPath) return
+    if (pathsEqual(draggingPath, node.path)) return
+    e.preventDefault()
+    e.dataTransfer.dropEffect = 'move'
+    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect()
+    const y = e.clientY - rect.top
+    const ratio = y / rect.height
+    let position: DropPosition = 'after'
+    if (node.isGroup && ratio > 0.25 && ratio < 0.75) position = 'into'
+    else if (ratio < 0.35) position = 'before'
+    else position = 'after'
+    setDropTarget({ path: node.path, position })
+  }
+
+  const onDrop = (e: DragEvent) => {
+    if (!enableReorder || !onMove || !draggingPath || !dropTarget) return
+    e.preventDefault()
+    if (!pathsEqual(dropTarget.path, node.path)) return
+    onMove(draggingPath, node.path, dropTarget.position)
+    setDraggingPath(null)
+    setDropTarget(null)
+  }
 
   return (
     <li>
       <div
-        className={`layer-row ${selected ? 'layer-row--selected' : ''}`}
+        className={[
+          'layer-row',
+          selected ? 'layer-row--selected' : '',
+          isDragging ? 'layer-row--dragging' : '',
+          isDropInto ? 'layer-row--drop-into' : '',
+          isDropBefore ? 'layer-row--drop-before' : '',
+          isDropAfter ? 'layer-row--drop-after' : '',
+        ]
+          .filter(Boolean)
+          .join(' ')}
         style={{ paddingLeft: `${0.65 + node.depth * 1.1}rem` }}
+        draggable={Boolean(enableReorder && onMove)}
+        onDragStart={onDragStart}
+        onDragEnd={() => {
+          setDraggingPath(null)
+          setDropTarget(null)
+        }}
+        onDragOver={onDragOver}
+        onDragLeave={() => {
+          if (dropTarget && pathsEqual(dropTarget.path, node.path)) setDropTarget(null)
+        }}
+        onDrop={onDrop}
       >
         {node.isGroup ? (
           <button
@@ -78,6 +162,56 @@ function NodeRow({
           </span>
         </button>
 
+        {enableReorder && onReorder && (
+          <div className="layer-row__reorder">
+            <button
+              type="button"
+              className="btn btn--ghost btn--icon"
+              disabled={!canReorder(layers, node.path, -1)}
+              onClick={() => onReorder(node.path, -1)}
+              title="Omhoog"
+            >
+              <ArrowUp size={14} />
+            </button>
+            <button
+              type="button"
+              className="btn btn--ghost btn--icon"
+              disabled={!canReorder(layers, node.path, 1)}
+              onClick={() => onReorder(node.path, 1)}
+              title="Omlaag"
+            >
+              <ArrowDown size={14} />
+            </button>
+          </div>
+        )}
+
+        {enableReorder && onMove && node.isGroup && draggingPath && !pathsEqual(draggingPath, node.path) && (
+          <button
+            type="button"
+            className="btn btn--ghost btn--sm"
+            onClick={() => {
+              onMove(draggingPath, node.path, 'into')
+              setDraggingPath(null)
+              setDropTarget(null)
+            }}
+            title="Verplaats hierheen"
+          >
+            <FolderInput size={14} />
+            Hier
+          </button>
+        )}
+
+        {enableReorder && onMove && (
+          <button
+            type="button"
+            className={`btn btn--ghost btn--icon ${isDragging ? 'is-active' : ''}`}
+            onClick={() => setDraggingPath(isDragging ? null : node.path)}
+            title="Sleep of markeer om te verplaatsen binnen deze webmap"
+          >
+            <Move size={14} />
+          </button>
+        )}
+
         {onCopy && (
           <button
             type="button"
@@ -97,12 +231,20 @@ function NodeRow({
             <NodeRow
               key={pathKey(child.path)}
               node={child}
+              layers={layers}
               selectedPath={selectedPath}
               onSelect={onSelect}
               onCopy={onCopy}
               copyLabel={copyLabel}
               expanded={expanded}
               onToggle={onToggle}
+              enableReorder={enableReorder}
+              onReorder={onReorder}
+              onMove={onMove}
+              draggingPath={draggingPath}
+              setDraggingPath={setDraggingPath}
+              dropTarget={dropTarget}
+              setDropTarget={setDropTarget}
             />
           ))}
         </ul>
@@ -118,6 +260,9 @@ export function LayerTree({
   onCopy,
   copyLabel = 'Kopieer →',
   emptyLabel = 'Geen operationele lagen',
+  enableReorder,
+  onReorder,
+  onMove,
 }: LayerTreeProps) {
   const tree = buildLayerTree(layers)
   const [expanded, setExpanded] = useState<Set<string>>(() => {
@@ -127,6 +272,10 @@ export function LayerTree({
     })
     return initial
   })
+  const [draggingPath, setDraggingPath] = useState<LayerPath | null>(null)
+  const [dropTarget, setDropTarget] = useState<{ path: LayerPath; position: DropPosition } | null>(
+    null,
+  )
 
   const onToggle = (key: string) => {
     setExpanded((prev) => {
@@ -142,19 +291,59 @@ export function LayerTree({
   }
 
   return (
-    <ul className="layer-tree__list layer-tree__list--root">
-      {tree.map((node) => (
-        <NodeRow
-          key={pathKey(node.path)}
-          node={node}
-          selectedPath={selectedPath}
-          onSelect={onSelect}
-          onCopy={onCopy}
-          copyLabel={copyLabel}
-          expanded={expanded}
-          onToggle={onToggle}
-        />
-      ))}
-    </ul>
+    <div className="layer-tree">
+      {enableReorder && draggingPath && (
+        <div className="layer-tree__move-bar">
+          <Move size={14} />
+          <span>Verplaatsen… sleep naar een groep of laag, of:</span>
+          <button
+            type="button"
+            className="btn btn--secondary btn--sm"
+            onClick={() => {
+              onMove?.(draggingPath, null, 'root')
+              setDraggingPath(null)
+            }}
+          >
+            Naar root
+          </button>
+          <button
+            type="button"
+            className="btn btn--ghost btn--sm"
+            onClick={() => setDraggingPath(null)}
+          >
+            Annuleren
+          </button>
+        </div>
+      )}
+      <ul
+        className="layer-tree__list layer-tree__list--root"
+        onDragOver={(e) => {
+          if (!enableReorder || !onMove || !draggingPath) return
+          // Allow dropping on empty root area below list via the bar only
+          e.preventDefault()
+        }}
+      >
+        {tree.map((node) => (
+          <NodeRow
+            key={pathKey(node.path)}
+            node={node}
+            layers={layers}
+            selectedPath={selectedPath}
+            onSelect={onSelect}
+            onCopy={onCopy}
+            copyLabel={copyLabel}
+            expanded={expanded}
+            onToggle={onToggle}
+            enableReorder={enableReorder}
+            onReorder={onReorder}
+            onMove={onMove}
+            draggingPath={draggingPath}
+            setDraggingPath={setDraggingPath}
+            dropTarget={dropTarget}
+            setDropTarget={setDropTarget}
+          />
+        ))}
+      </ul>
+    </div>
   )
 }

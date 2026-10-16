@@ -13,9 +13,11 @@ import {
   ensureWebMapShape,
   getLayerAtPath,
   insertLayer,
+  moveLayer,
+  reorderSibling,
 } from '../lib/webmap'
 import { JsonViewer } from './JsonViewer'
-import { LayerTree } from './LayerTree'
+import { LayerTree, type DropPosition } from './LayerTree'
 
 interface WebmapCompareProps {
   initialLeftId?: string
@@ -142,6 +144,57 @@ export function WebmapCompare({ initialLeftId, initialRightId, onBack }: WebmapC
     setStatus(`${kind[0].toUpperCase()}${kind.slice(1)} “${name}” gekopieerd ${directionLabel}${into}. Vergeet niet op te slaan.`)
   }
 
+  const moveWithin = (
+    side: 'left' | 'right',
+    from: LayerPath,
+    to: LayerPath | null,
+    position: DropPosition | 'root',
+  ) => {
+    const setter = side === 'left' ? setLeft : setRight
+    setter((prev) => {
+      if (!prev.data) return prev
+      const layers = prev.data.operationalLayers ?? []
+      const source = getLayerAtPath(layers, from)
+      const targetTitle =
+        to && position === 'into' ? getLayerAtPath(layers, to)?.title || 'groep' : null
+      const nextLayers = moveLayer(layers, from, to, position)
+      const name = source?.title || source?.id || 'item'
+      const dest =
+        position === 'root'
+          ? 'naar root'
+          : position === 'into'
+            ? `in “${targetTitle}”`
+            : position === 'before'
+              ? 'vóór doel'
+              : 'ná doel'
+      queueMicrotask(() =>
+        setStatus(`“${name}” verplaatst ${dest} in deze webmap. Vergeet niet op te slaan.`),
+      )
+      return {
+        ...prev,
+        data: { ...prev.data, operationalLayers: nextLayers },
+        selected: null,
+        dirty: true,
+      }
+    })
+  }
+
+  const reorderWithin = (side: 'left' | 'right', path: LayerPath, direction: -1 | 1) => {
+    const setter = side === 'left' ? setLeft : setRight
+    const index = path[path.length - 1]
+    if (index === undefined) return
+    setter((prev) => {
+      if (!prev.data) return prev
+      const nextLayers = reorderSibling(prev.data.operationalLayers ?? [], path, direction)
+      return {
+        ...prev,
+        data: { ...prev.data, operationalLayers: nextLayers },
+        selected: [...path.slice(0, -1), index + direction],
+        dirty: true,
+      }
+    })
+  }
+
   const saveSide = async (side: 'left' | 'right') => {
     const pane = side === 'left' ? left : right
     const setter = side === 'left' ? setLeft : setRight
@@ -215,8 +268,8 @@ export function WebmapCompare({ initialLeftId, initialRightId, onBack }: WebmapC
             <div className="compare-pane__hint">
               <FolderInput size={14} />
               <span>
-                Selecteer een laag/groep en kopieer. Selecteer op de andere kant een groep om erín te
-                plakken; anders komt het op root-niveau.
+                Binnen deze webmap: sleep lagen/groepen, of ↑↓ / verplaats-icoon. Tussen webmaps:
+                knop {copyLabel}. Selecteer op de andere kant een groep om erín te plakken.
               </span>
             </div>
             <LayerTree
@@ -228,6 +281,9 @@ export function WebmapCompare({ initialLeftId, initialRightId, onBack }: WebmapC
                 onCopy(path)
               }}
               copyLabel={copyLabel}
+              enableReorder
+              onReorder={(path, direction) => reorderWithin(side, path, direction)}
+              onMove={(from, to, position) => moveWithin(side, from, to, position)}
             />
             <button
               type="button"
@@ -258,7 +314,7 @@ export function WebmapCompare({ initialLeftId, initialRightId, onBack }: WebmapC
         <div>
           <h2>Webmaps naast elkaar</h2>
           <p className="muted">
-            Kopieer groepen en lagen zonder JSON te bewerken. IDs worden automatisch vernieuwd.
+            Verplaats lagen binnen een webmap, of kopieer tussen webmaps — zonder JSON te bewerken.
           </p>
         </div>
         <div className="compare__actions">

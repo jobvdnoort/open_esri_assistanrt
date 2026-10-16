@@ -4,8 +4,10 @@ import {
   buildLayerTree,
   getLayerAtPath,
   insertLayer,
+  moveLayer,
   regenerateLayerIds,
   removeLayerAtPath,
+  reorderSibling,
 } from './webmap'
 
 const sample: OperationalLayer[] = [
@@ -60,5 +62,40 @@ describe('webmap helpers', () => {
     const next = removeLayerAtPath(sample, [0, 0])
     expect(next[0].layers).toHaveLength(1)
     expect(next[0].layers?.[0].title).toBe('Laag 2')
+  })
+
+  it('moves a layer into another group without regenerating ids', () => {
+    const withSecondGroup: OperationalLayer[] = [
+      ...sample,
+      {
+        id: 'g2',
+        layerType: 'GroupLayer',
+        title: 'Groep B',
+        layers: [],
+      },
+    ]
+    const next = moveLayer(withSecondGroup, [0, 0], [2], 'into')
+    expect(next[0].layers).toHaveLength(1)
+    expect(next[0].layers?.[0].id).toBe('l2')
+    expect(next[2].layers).toHaveLength(1)
+    expect(next[2].layers?.[0].id).toBe('l1')
+  })
+
+  it('moves a nested layer to root', () => {
+    const next = moveLayer(sample, [0, 1], null, 'root')
+    expect(next[0].layers).toHaveLength(1)
+    expect(next).toHaveLength(3)
+    expect(next[2].id).toBe('l2')
+  })
+
+  it('reorders siblings', () => {
+    const next = reorderSibling(sample, [0, 0], 1)
+    expect(next[0].layers?.[0].id).toBe('l2')
+    expect(next[0].layers?.[1].id).toBe('l1')
+  })
+
+  it('does not move a group into itself', () => {
+    const next = moveLayer(sample, [0], [0, 0], 'into')
+    expect(next).toEqual(sample)
   })
 })
