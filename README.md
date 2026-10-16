@@ -18,7 +18,21 @@ npm install
 npm run dev
 ```
 
-Open de getoonde URL. Kies **Probeer demomodus** om zonder portal te testen, of log in met je portal-credentials.
+Open de getoonde URL. Kies **Probeer demomodus** om zonder portal te testen, of log in op je portal.
+
+### Inloggen op ArcGIS Enterprise (geen API key)
+
+Username/password werkt alleen voor **ingebouwde** ArcGIS-accounts. Portals met **SAML/SSO** (zoals veel Enterprise-omgevingen) geven anders `COM_0019: Not logged in`.
+
+Gebruik dan **OAuth**:
+
+1. In het portaal: **Content → Add item → Application**
+2. Type: Web mapping / Application
+3. Redirect URI: `http://127.0.0.1:5173/` (en eventueel `http://localhost:5173/`)
+4. Kopieer de **Client ID** naar het OAuth-tabblad in de app
+5. Klik **Inloggen met portal (OAuth)** — er opent een portal-login (incl. SAML)
+
+Alternatief: tab **Token** met een handmatig gegenereerde portal-token.
 
 ## Workflow: groep verplaatsen / kopiëren
 

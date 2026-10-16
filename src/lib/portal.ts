@@ -22,6 +22,41 @@ export function normalizePortalUrl(input: string): string {
   return url
 }
 
+export function getOAuthRedirectUri(): string {
+  if (typeof window === 'undefined') return 'http://127.0.0.1:5173/'
+  return `${window.location.origin}/`
+}
+
+const OAUTH_PENDING_KEY = 'oea-oauth-pending'
+
+export interface OAuthPending {
+  clientId: string
+  portal: string
+  redirectUri: string
+}
+
+export function saveOAuthPending(pending: OAuthPending) {
+  sessionStorage.setItem(OAUTH_PENDING_KEY, JSON.stringify(pending))
+}
+
+export function loadOAuthPending(): OAuthPending | null {
+  try {
+    const raw = sessionStorage.getItem(OAUTH_PENDING_KEY)
+    return raw ? (JSON.parse(raw) as OAuthPending) : null
+  } catch {
+    return null
+  }
+}
+
+export function clearOAuthPending() {
+  sessionStorage.removeItem(OAUTH_PENDING_KEY)
+}
+
+/** True when this window loaded as an OAuth redirect target. */
+export function isOAuthCallbackUrl(href = typeof window !== 'undefined' ? window.location.href : ''): boolean {
+  return /[?#].*(?:code=|access_token=)/.test(href)
+}
+
 export async function signInWithPassword(
   portalUrl: string,
   username: string,
@@ -33,6 +68,52 @@ export async function signInWithPassword(
     password,
     portal,
     referer: typeof window !== 'undefined' ? window.location.origin : 'https://localhost',
+  })
+}
+
+export async function beginPortalOAuth(
+  portalUrl: string,
+  clientId: string,
+): Promise<ArcGISIdentityManager | undefined> {
+  const portal = normalizePortalUrl(portalUrl)
+  const redirectUri = getOAuthRedirectUri()
+  saveOAuthPending({ clientId: clientId.trim(), portal, redirectUri })
+  return ArcGISIdentityManager.beginOAuth2({
+    clientId: clientId.trim(),
+    portal,
+    redirectUri,
+    popup: true,
+    pkce: true,
+  })
+}
+
+export async function completePortalOAuth(
+  pending: OAuthPending = loadOAuthPending()!,
+): Promise<ArcGISIdentityManager> {
+  if (!pending?.clientId) {
+    throw new Error('OAuth-config ontbreekt. Start opnieuw via Inloggen met OAuth.')
+  }
+  const manager = await ArcGISIdentityManager.completeOAuth2({
+    clientId: pending.clientId,
+    portal: pending.portal,
+    redirectUri: pending.redirectUri,
+    popup: true,
+    pkce: true,
+  })
+  clearOAuthPending()
+  return manager
+}
+
+export async function signInWithToken(
+  portalUrl: string,
+  token: string,
+  username?: string,
+): Promise<ArcGISIdentityManager> {
+  const portal = normalizePortalUrl(portalUrl)
+  return ArcGISIdentityManager.fromToken({
+    token: token.trim(),
+    portal,
+    username: username?.trim() || undefined,
   })
 }
 

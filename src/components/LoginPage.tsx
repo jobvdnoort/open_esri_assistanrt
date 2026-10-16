@@ -1,15 +1,44 @@
-import { Compass, MapPinned } from 'lucide-react'
+import { Compass, KeyRound, MapPinned, Shield } from 'lucide-react'
 import { useState, type FormEvent } from 'react'
 import { useAuth } from '../context/AuthContext'
+import { getOAuthRedirectUri } from '../lib/portal'
+
+type Tab = 'oauth' | 'password' | 'token'
 
 export function LoginPage() {
-  const { signIn, enterDemo, loading, error } = useAuth()
-  const [portalUrl, setPortalUrl] = useState('https://www.arcgis.com')
+  const {
+    signIn,
+    signInOAuth,
+    signInToken,
+    enterDemo,
+    loading,
+    error,
+    loginPrefs,
+    saveLoginPrefs,
+  } = useAuth()
+  const [tab, setTab] = useState<Tab>('oauth')
+  const [portalUrl, setPortalUrl] = useState(loginPrefs.portalUrl)
+  const [clientId, setClientId] = useState(loginPrefs.clientId)
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
+  const [token, setToken] = useState('')
   const [localError, setLocalError] = useState<string | null>(null)
 
-  const onSubmit = async (e: FormEvent) => {
+  const redirectUri = getOAuthRedirectUri()
+
+  const onPortalBlur = () => saveLoginPrefs({ portalUrl })
+
+  const onOAuth = async (e: FormEvent) => {
+    e.preventDefault()
+    setLocalError(null)
+    try {
+      await signInOAuth(portalUrl, clientId)
+    } catch (err) {
+      setLocalError(err instanceof Error ? err.message : 'OAuth mislukt')
+    }
+  }
+
+  const onPassword = async (e: FormEvent) => {
     e.preventDefault()
     setLocalError(null)
     try {
@@ -19,10 +48,20 @@ export function LoginPage() {
     }
   }
 
+  const onToken = async (e: FormEvent) => {
+    e.preventDefault()
+    setLocalError(null)
+    try {
+      await signInToken(portalUrl, token, username || undefined)
+    } catch (err) {
+      setLocalError(err instanceof Error ? err.message : 'Token-login mislukt')
+    }
+  }
+
   return (
     <div className="login">
       <div className="login__backdrop" aria-hidden="true" />
-      <div className="login__panel">
+      <div className="login__panel login__panel--wide">
         <div className="login__brand">
           <MapPinned className="login__mark" size={36} strokeWidth={1.6} />
           <div>
@@ -31,47 +70,142 @@ export function LoginPage() {
           </div>
         </div>
         <p className="login__lead">
-          Blader door items, bekijk webmap-JSON, en kopieer groepen en lagen tussen twee webmaps naast
-          elkaar.
+          Geen API key nodig. Voor Enterprise-portals met SAML/SSO (zoals Boskalis) gebruik je OAuth
+          met een App Client ID.
         </p>
 
-        <form className="login__form" onSubmit={onSubmit}>
-          <label>
-            Portal URL
-            <input
-              value={portalUrl}
-              onChange={(e) => setPortalUrl(e.target.value)}
-              placeholder="https://www.arcgis.com of je Enterprise portal"
-              autoComplete="url"
-              required
-            />
-          </label>
-          <label>
-            Gebruikersnaam
-            <input
-              value={username}
-              onChange={(e) => setUsername(e.target.value)}
-              autoComplete="username"
-              required
-            />
-          </label>
-          <label>
-            Wachtwoord
-            <input
-              type="password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              autoComplete="current-password"
-              required
-            />
-          </label>
+        <div className="login__callout">
+          <Shield size={16} />
+          <div>
+            <strong>COM_0019 / username-password werkt niet?</strong>
+            <p>
+              Dat is normaal bij SAML. Registreer in het portaal een Application-item, zet redirect
+              URI op <code>{redirectUri}</code>, plak de Client ID hieronder en log in via OAuth.
+            </p>
+          </div>
+        </div>
 
-          {(localError || error) && <p className="form-error">{localError || error}</p>}
-
-          <button type="submit" className="btn btn--primary" disabled={loading}>
-            {loading ? 'Bezig…' : 'Inloggen'}
+        <div className="tabs login__tabs">
+          <button
+            type="button"
+            className={`tabs__btn ${tab === 'oauth' ? 'is-active' : ''}`}
+            onClick={() => setTab('oauth')}
+          >
+            OAuth (aanbevolen)
           </button>
-        </form>
+          <button
+            type="button"
+            className={`tabs__btn ${tab === 'password' ? 'is-active' : ''}`}
+            onClick={() => setTab('password')}
+          >
+            Gebruiker / wachtwoord
+          </button>
+          <button
+            type="button"
+            className={`tabs__btn ${tab === 'token' ? 'is-active' : ''}`}
+            onClick={() => setTab('token')}
+          >
+            Token
+          </button>
+        </div>
+
+        <label className="login__portal">
+          Portal URL
+          <input
+            value={portalUrl}
+            onChange={(e) => setPortalUrl(e.target.value)}
+            onBlur={onPortalBlur}
+            placeholder="https://jouw-org.com/portal"
+            autoComplete="url"
+            required
+          />
+        </label>
+
+        {tab === 'oauth' && (
+          <form className="login__form" onSubmit={onOAuth}>
+            <label>
+              App Client ID
+              <input
+                value={clientId}
+                onChange={(e) => setClientId(e.target.value)}
+                onBlur={() => saveLoginPrefs({ clientId })}
+                placeholder="bijv. abcdefghijklmnopqrstuvwxyz"
+                required
+              />
+            </label>
+            <p className="muted login__hint">
+              Content → Add item → Application → Redirect URI: <code>{redirectUri}</code> (en eventueel
+              http://localhost:5173/). Gebruik daarna de Client ID.
+            </p>
+            {(localError || error) && <p className="form-error">{localError || error}</p>}
+            <button type="submit" className="btn btn--primary" disabled={loading}>
+              <KeyRound size={16} />
+              {loading ? 'Bezig…' : 'Inloggen met portal (OAuth)'}
+            </button>
+          </form>
+        )}
+
+        {tab === 'password' && (
+          <form className="login__form" onSubmit={onPassword}>
+            <p className="muted login__hint">
+              Alleen voor <strong>ingebouwde</strong> ArcGIS-accounts. Bedrijfs-SSO-wachtwoorden werken
+              hier niet.
+            </p>
+            <label>
+              Gebruikersnaam
+              <input
+                value={username}
+                onChange={(e) => setUsername(e.target.value)}
+                autoComplete="username"
+                required
+              />
+            </label>
+            <label>
+              Wachtwoord
+              <input
+                type="password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                autoComplete="current-password"
+                required
+              />
+            </label>
+            {(localError || error) && <p className="form-error">{localError || error}</p>}
+            <button type="submit" className="btn btn--primary" disabled={loading}>
+              {loading ? 'Bezig…' : 'Inloggen'}
+            </button>
+          </form>
+        )}
+
+        {tab === 'token' && (
+          <form className="login__form" onSubmit={onToken}>
+            <p className="muted login__hint">
+              Plak een geldige portal-token (bijv. via generateToken). Optioneel: username voor weergave.
+            </p>
+            <label>
+              Gebruikersnaam (optioneel)
+              <input
+                value={username}
+                onChange={(e) => setUsername(e.target.value)}
+                autoComplete="username"
+              />
+            </label>
+            <label>
+              Token
+              <textarea
+                value={token}
+                onChange={(e) => setToken(e.target.value)}
+                rows={3}
+                required
+                spellCheck={false}
+              />
+            </label>
+            {(localError || error) && <p className="form-error">{localError || error}</p>}
+            <button type="submit" className="btn btn--primary" disabled={loading}>
+              {loading ? 'Bezig…' : 'Inloggen met token'}
+            </button>
+          </form>
+        )}
 
         <div className="login__divider">
           <span>of</span>

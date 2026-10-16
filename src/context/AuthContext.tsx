@@ -8,6 +8,7 @@ import {
   useState,
   type ReactNode,
 } from 'react'
+import { formatAuthError } from '../lib/authErrors'
 import {
   DEMO_PORTAL,
   demoGetData,
@@ -17,24 +18,35 @@ import {
   resetDemoData,
 } from '../lib/demo'
 import {
+  beginPortalOAuth,
+  completePortalOAuth,
   fetchItem,
   fetchItemData,
   fetchWebMap,
   getPortalSelf,
+  isOAuthCallbackUrl,
+  loadOAuthPending,
   normalizePortalUrl,
   saveWebMapData,
   searchPortalItems,
   signInWithPassword,
+  signInWithToken,
 } from '../lib/portal'
 import type { PortalItem, PortalSelf, WebMapData } from '../types/arcgis'
 
 const SESSION_KEY = 'oea-session'
+const PREFS_KEY = 'oea-login-prefs'
 
 type SessionMode = 'live' | 'demo'
 
 interface StoredSession {
   mode: SessionMode
   serializedAuth?: string
+}
+
+export interface LoginPrefs {
+  portalUrl: string
+  clientId: string
 }
 
 interface AuthContextValue {
@@ -44,7 +56,11 @@ interface AuthContextValue {
   portalUrl: string
   loading: boolean
   error: string | null
+  loginPrefs: LoginPrefs
+  saveLoginPrefs: (prefs: Partial<LoginPrefs>) => void
   signIn: (portalUrl: string, username: string, password: string) => Promise<void>
+  signInOAuth: (portalUrl: string, clientId: string) => Promise<void>
+  signInToken: (portalUrl: string, token: string, username?: string) => Promise<void>
   enterDemo: () => void
   signOut: () => void
   searchItems: (query: string, type?: string) => Promise<{ results: PortalItem[]; total: number }>
@@ -74,6 +90,23 @@ function persist(session: StoredSession | null) {
   sessionStorage.setItem(SESSION_KEY, JSON.stringify(session))
 }
 
+function loadPrefs(): LoginPrefs {
+  try {
+    const raw = localStorage.getItem(PREFS_KEY)
+    if (raw) return JSON.parse(raw) as LoginPrefs
+  } catch {
+    /* ignore */
+  }
+  return {
+    portalUrl: 'https://gisportal-test.boskalis.com/portal',
+    clientId: '',
+  }
+}
+
+function persistPrefs(prefs: LoginPrefs) {
+  localStorage.setItem(PREFS_KEY, JSON.stringify(prefs))
+}
+
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [mode, setMode] = useState<SessionMode | null>(null)
   const [auth, setAuth] = useState<ArcGISIdentityManager | null>(null)
@@ -81,66 +114,147 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [portalUrl, setPortalUrl] = useState('https://www.arcgis.com/sharing/rest')
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [loginPrefs, setLoginPrefs] = useState<LoginPrefs>(() => loadPrefs())
+
+  const applySession = useCallback(async (manager: ArcGISIdentityManager) => {
+    const self = await getPortalSelf(manager)
+    setAuth(manager)
+    setPortal(self)
+    setMode('live')
+    setPortalUrl(manager.portal)
+    persist({
+      mode: 'live',
+      serializedAuth: manager.serialize(),
+    })
+  }, [])
 
   useEffect(() => {
-    const stored = loadStored()
-    if (!stored) {
-      setLoading(false)
-      return
-    }
-    if (stored.mode === 'demo') {
-      setMode('demo')
-      setPortal(DEMO_PORTAL)
-      setPortalUrl('demo://local')
-      setLoading(false)
-      return
-    }
-    if (stored.mode === 'live' && stored.serializedAuth) {
-      try {
-        const manager = ArcGISIdentityManager.deserialize(stored.serializedAuth)
-        setAuth(manager)
-        setMode('live')
-        setPortalUrl(manager.portal)
-        getPortalSelf(manager)
-          .then((self) => setPortal(self))
-          .catch(() => {
-            persist(null)
+    let cancelled = false
+
+    ;(async () => {
+      // OAuth popup callback: finish auth in the popup and close.
+      if (isOAuthCallbackUrl() && loadOAuthPending()) {
+        try {
+          await completePortalOAuth()
+          // completeOAuth2 with popup:true posts back to opener and closes.
+        } catch (err) {
+          if (!cancelled) setError(formatAuthError(err))
+        } finally {
+          if (!cancelled) setLoading(false)
+        }
+        return
+      }
+
+      const stored = loadStored()
+      if (!stored) {
+        if (!cancelled) setLoading(false)
+        return
+      }
+      if (stored.mode === 'demo') {
+        if (!cancelled) {
+          setMode('demo')
+          setPortal(DEMO_PORTAL)
+          setPortalUrl('demo://local')
+          setLoading(false)
+        }
+        return
+      }
+      if (stored.mode === 'live' && stored.serializedAuth) {
+        try {
+          const manager = ArcGISIdentityManager.deserialize(stored.serializedAuth)
+          if (cancelled) return
+          setAuth(manager)
+          setMode('live')
+          setPortalUrl(manager.portal)
+          const self = await getPortalSelf(manager)
+          if (!cancelled) setPortal(self)
+        } catch {
+          persist(null)
+          if (!cancelled) {
             setAuth(null)
             setMode(null)
             setPortal(null)
-          })
-          .finally(() => setLoading(false))
-      } catch {
-        persist(null)
-        setLoading(false)
+          }
+        } finally {
+          if (!cancelled) setLoading(false)
+        }
+        return
       }
-      return
+      if (!cancelled) setLoading(false)
+    })()
+
+    return () => {
+      cancelled = true
     }
-    setLoading(false)
   }, [])
 
-  const signIn = useCallback(async (portalInput: string, username: string, password: string) => {
-    setLoading(true)
-    setError(null)
-    try {
-      const manager = await signInWithPassword(portalInput, username, password)
-      const self = await getPortalSelf(manager)
-      setAuth(manager)
-      setPortal(self)
-      setMode('live')
-      setPortalUrl(manager.portal)
-      persist({
-        mode: 'live',
-        serializedAuth: manager.serialize(),
-      })
-    } catch (err) {
-      const message = err instanceof Error ? err.message : 'Inloggen mislukt'
-      setError(message)
-      throw err
-    } finally {
-      setLoading(false)
-    }
+  const saveLoginPrefs = useCallback((partial: Partial<LoginPrefs>) => {
+    setLoginPrefs((prev) => {
+      const next = { ...prev, ...partial }
+      persistPrefs(next)
+      return next
+    })
   }, [])
+
+  const signIn = useCallback(
+    async (portalInput: string, username: string, password: string) => {
+      setLoading(true)
+      setError(null)
+      saveLoginPrefs({ portalUrl: portalInput })
+      try {
+        const manager = await signInWithPassword(portalInput, username, password)
+        await applySession(manager)
+      } catch (err) {
+        const message = formatAuthError(err)
+        setError(message)
+        throw new Error(message)
+      } finally {
+        setLoading(false)
+      }
+    },
+    [applySession, saveLoginPrefs],
+  )
+
+  const signInOAuth = useCallback(
+    async (portalInput: string, clientId: string) => {
+      setLoading(true)
+      setError(null)
+      saveLoginPrefs({ portalUrl: portalInput, clientId })
+      try {
+        const manager = await beginPortalOAuth(portalInput, clientId)
+        if (!manager) {
+          throw new Error('OAuth-popup geblokkeerd of gesloten. Sta popups toe en probeer opnieuw.')
+        }
+        await applySession(manager)
+      } catch (err) {
+        const message = formatAuthError(err)
+        setError(message)
+        throw new Error(message)
+      } finally {
+        setLoading(false)
+      }
+    },
+    [applySession, saveLoginPrefs],
+  )
+
+  const signInToken = useCallback(
+    async (portalInput: string, token: string, username?: string) => {
+      setLoading(true)
+      setError(null)
+      saveLoginPrefs({ portalUrl: portalInput })
+      try {
+        const manager = await signInWithToken(portalInput, token, username)
+        await applySession(manager)
+      } catch (err) {
+        const message = formatAuthError(err)
+        setError(message)
+        throw new Error(message)
+      } finally {
+        setLoading(false)
+      }
+    },
+    [applySession, saveLoginPrefs],
+  )
 
   const enterDemo = useCallback(() => {
     resetDemoData()
@@ -229,7 +343,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       portalUrl: mode === 'live' ? portalUrl : normalizePortalUrl('https://www.arcgis.com'),
       loading,
       error,
+      loginPrefs,
+      saveLoginPrefs,
       signIn,
+      signInOAuth,
+      signInToken,
       enterDemo,
       signOut,
       searchItems: searchItemsFn,
@@ -246,7 +364,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       portalUrl,
       loading,
       error,
+      loginPrefs,
+      saveLoginPrefs,
       signIn,
+      signInOAuth,
+      signInToken,
       enterDemo,
       signOut,
       searchItemsFn,
