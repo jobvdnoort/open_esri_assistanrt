@@ -490,11 +490,43 @@ p {
   outline: none !important;
 }
 
+.browser__scopes {
+  margin-bottom: 0.9rem;
+}
+
+.browser__scopes .tabs__btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.browser__crumb {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  margin-bottom: 0.75rem;
+}
+
 .browser__meta {
   display: flex;
   justify-content: space-between;
+  gap: 1rem;
   margin-bottom: 0.7rem;
   font-size: 0.9rem;
+}
+
+.browser__query {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  max-width: 55%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.item-table__head--groups,
+.item-table__row--groups {
+  grid-template-columns: minmax(0, 1.8fr) 160px 120px auto;
 }
 
 .item-table {

@@ -1,11 +1,4 @@
-import {
-  getItem,
-  getItemData,
-  getUserContent,
-  searchItems,
-  updateItem,
-  type ISearchResult,
-} from '@esri/arcgis-rest-portal'
+import { getItem, getItemData, updateItem } from '@esri/arcgis-rest-portal'
 import { ArcGISIdentityManager, request } from '@esri/arcgis-rest-request'
 import type { PortalItem, PortalSelf, WebMapData } from '../types/arcgis'
 import { ensureWebMapShape } from './webmap'
@@ -149,32 +142,6 @@ export async function getPortalSelf(auth: ArcGISIdentityManager): Promise<Portal
     authentication: auth,
     httpMethod: 'GET',
   }) as Promise<PortalSelf>
-}
-
-export async function searchPortalItems(
-  auth: ArcGISIdentityManager,
-  query: string,
-  options?: { start?: number; num?: number; type?: string },
-): Promise<ISearchResult<PortalItem>> {
-  const parts = [query.trim() || 'owner:me']
-  if (options?.type) {
-    parts.push(`type:"${options.type}"`)
-  }
-  return searchItems({
-    q: parts.join(' AND '),
-    start: options?.start ?? 1,
-    num: options?.num ?? 50,
-    sortField: 'modified',
-    sortOrder: 'desc',
-    authentication: auth,
-  }) as Promise<ISearchResult<PortalItem>>
-}
-
-export async function fetchUserFolders(auth: ArcGISIdentityManager, username: string) {
-  return getUserContent({
-    owner: username,
-    authentication: auth,
-  })
 }
 
 export async function fetchItem(auth: ArcGISIdentityManager, id: string): Promise<PortalItem> {

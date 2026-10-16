@@ -10,6 +10,14 @@ import {
 } from 'react'
 import { formatAuthError } from '../lib/authErrors'
 import {
+  listUserGroups,
+  searchGroupItems,
+  searchPortalContent,
+  type ContentResult,
+  type ContentScope,
+  type PortalGroup,
+} from '../lib/content'
+import {
   DEMO_PORTAL,
   demoGetData,
   demoGetItem,
@@ -28,7 +36,6 @@ import {
   loadOAuthPending,
   normalizePortalUrl,
   saveWebMapData,
-  searchPortalItems,
   signInWithPassword,
   signInWithToken,
 } from '../lib/portal'
@@ -63,6 +70,17 @@ interface AuthContextValue {
   signInToken: (portalUrl: string, token: string, username?: string) => Promise<void>
   enterDemo: () => void
   signOut: () => void
+  browseContent: (options: {
+    scope: ContentScope
+    query?: string
+    type?: string
+  }) => Promise<ContentResult>
+  listGroups: () => Promise<PortalGroup[]>
+  browseGroupItems: (
+    groupId: string,
+    options?: { query?: string; type?: string },
+  ) => Promise<ContentResult>
+  /** Convenience: webmaps from my content, falling back to org search. */
   searchItems: (query: string, type?: string) => Promise<{ results: PortalItem[]; total: number }>
   getItem: (id: string) => Promise<PortalItem>
   getItemData: (id: string) => Promise<unknown>
@@ -275,17 +293,66 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     persist(null)
   }, [])
 
-  const searchItemsFn = useCallback(
-    async (query: string, type?: string) => {
+  const browseContentFn = useCallback(
+    async (options: { scope: ContentScope; query?: string; type?: string }) => {
       if (mode === 'demo') {
-        const result = demoSearch(query, type)
-        return { results: result.results, total: result.total }
+        const result = demoSearch(options.query ?? '', options.type)
+        return {
+          results: result.results,
+          total: result.total,
+          queryUsed: `demo ${options.scope}`,
+          username: 'demo.user',
+        }
       }
       if (!auth) throw new Error('Niet ingelogd')
-      const result = await searchPortalItems(auth, query, { type })
-      return { results: result.results as PortalItem[], total: result.total }
+      return searchPortalContent(auth, portal, options)
+    },
+    [auth, mode, portal],
+  )
+
+  const listGroupsFn = useCallback(async () => {
+    if (mode === 'demo') {
+      return [
+        {
+          id: 'demo-group-1',
+          title: 'Demo projectgroep',
+          owner: 'demo.user',
+          access: 'private',
+          snippet: 'Voorbeeldgroep in demomodus',
+          modified: Date.now(),
+        },
+      ] satisfies PortalGroup[]
+    }
+    if (!auth) throw new Error('Niet ingelogd')
+    return listUserGroups(auth)
+  }, [auth, mode])
+
+  const browseGroupItemsFn = useCallback(
+    async (groupId: string, options?: { query?: string; type?: string }) => {
+      if (mode === 'demo') {
+        const result = demoSearch(options?.query ?? '', options?.type)
+        return {
+          results: result.results,
+          total: result.total,
+          queryUsed: `demo group:${groupId}`,
+        }
+      }
+      if (!auth) throw new Error('Niet ingelogd')
+      return searchGroupItems(auth, groupId, options)
     },
     [auth, mode],
+  )
+
+  const searchItemsFn = useCallback(
+    async (query: string, type?: string) => {
+      const mine = await browseContentFn({ scope: 'mine', query, type })
+      if (mine.results.length > 0 || mode === 'demo') {
+        return { results: mine.results, total: mine.total }
+      }
+      const org = await browseContentFn({ scope: 'org', query, type })
+      return { results: org.results, total: org.total }
+    },
+    [browseContentFn, mode],
   )
 
   const getItemFn = useCallback(
@@ -351,6 +418,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       signInToken,
       enterDemo,
       signOut,
+      browseContent: browseContentFn,
+      listGroups: listGroupsFn,
+      browseGroupItems: browseGroupItemsFn,
       searchItems: searchItemsFn,
       getItem: getItemFn,
       getItemData: getItemDataFn,
@@ -372,6 +442,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       signInToken,
       enterDemo,
       signOut,
+      browseContentFn,
+      listGroupsFn,
+      browseGroupItemsFn,
       searchItemsFn,
       getItemFn,
       getItemDataFn,
