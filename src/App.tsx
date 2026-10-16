@@ -1,41 +1,58 @@
-import { ArrowRightLeft, FolderOpen, LogOut, MapPinned } from 'lucide-react'
 import { lazy, Suspense, useState } from 'react'
 import { LoginPage } from './components/LoginPage'
+import { PortalChrome, type PortalSection } from './components/portal/PortalChrome'
+import {
+  CONTENT_TABS,
+  GROUPS_TABS,
+  ORG_TABS,
+  type ContentTab,
+  type GroupsTab,
+  type OrgTab,
+} from './components/portal/tabs'
 import { useAuth } from './context/AuthContext'
 import type { PortalItem } from './types/arcgis'
 import './App.css'
+import './portal.css'
 
-const PortalBrowser = lazy(() =>
-  import('./components/PortalBrowser').then((m) => ({ default: m.PortalBrowser })),
+const ContentPage = lazy(() =>
+  import('./components/portal/ContentPage').then((m) => ({ default: m.ContentPage })),
 )
-const ItemDetail = lazy(() =>
-  import('./components/ItemDetail').then((m) => ({ default: m.ItemDetail })),
+const GroupsPage = lazy(() =>
+  import('./components/portal/GroupsPage').then((m) => ({ default: m.GroupsPage })),
 )
-const WebmapCompare = lazy(() =>
-  import('./components/WebmapCompare').then((m) => ({ default: m.WebmapCompare })),
+const OrganizationPage = lazy(() =>
+  import('./components/portal/OrganizationPage').then((m) => ({ default: m.OrganizationPage })),
+)
+const MapViewerPage = lazy(() =>
+  import('./components/portal/MapViewerPage').then((m) => ({ default: m.MapViewerPage })),
+)
+const ItemDetailsPage = lazy(() =>
+  import('./components/portal/ItemDetailsPage').then((m) => ({ default: m.ItemDetailsPage })),
 )
 
 type View =
-  | { name: 'browser' }
+  | { name: 'home' }
+  | { name: 'content'; tab: ContentTab }
+  | { name: 'groups'; tab: GroupsTab }
+  | { name: 'organization'; tab: OrgTab }
+  | { name: 'map'; itemId?: string }
   | { name: 'item'; itemId: string }
-  | { name: 'compare'; leftId?: string; rightId?: string }
 
 function ViewFallback() {
   return (
-    <div className="boot boot--inline">
-      <p>Laden…</p>
+    <div className="ep-spinner-wrap">
+      <div className="ep-spinner" />
     </div>
   )
 }
 
 export default function App() {
-  const { mode, portal, loading, signOut, error } = useAuth()
-  const [view, setView] = useState<View>({ name: 'browser' })
+  const { mode, portal, loading, error } = useAuth()
+  const [view, setView] = useState<View>({ name: 'content', tab: 'mine' })
 
   if (loading && !mode) {
     return (
       <div className="boot">
-        <MapPinned size={28} />
         <p>Sessie laden…</p>
       </div>
     )
@@ -54,85 +71,128 @@ export default function App() {
     )
   }
 
-  const userLabel = portal?.user?.fullName || portal?.user?.username || 'Gebruiker'
+  const navigate = (next: PortalSection) => {
+    if (next === 'home') setView({ name: 'home' })
+    else if (next === 'map') setView({ name: 'map' })
+    else if (next === 'groups') setView({ name: 'groups', tab: 'mine' })
+    else if (next === 'content') setView({ name: 'content', tab: 'mine' })
+    else if (next === 'organization') setView({ name: 'organization', tab: 'overview' })
+  }
 
-  return (
-    <div className="shell">
-      <header className="topnav">
-        <div className="topnav__brand">
-          <MapPinned size={20} strokeWidth={1.8} />
-          <strong>Open Esri Assistant</strong>
-          <span className="topnav__org">{portal?.name ?? 'Portaal'}</span>
+  const openItem = (item: PortalItem) => setView({ name: 'item', itemId: item.id })
+  const openMap = (item: PortalItem) => setView({ name: 'map', itemId: item.id })
+
+  if (view.name === 'home') {
+    return (
+      <PortalChrome section="home" onNavigate={navigate} title={portal?.name || 'Home'}>
+        <div className="ep-home">
+          <h2>Welcome</h2>
+          <p className="muted">
+            Home is voorlopig een eenvoudige landingspagina. Pas deze later aan, of gebruik Content /
+            Map / Groups / Organization zoals in het Enterprise-portaal.
+          </p>
+          <div className="ep-home__actions">
+            <button
+              type="button"
+              className="ep-btn ep-btn--primary"
+              onClick={() => setView({ name: 'content', tab: 'mine' })}
+            >
+              Go to Content
+            </button>
+            <button
+              type="button"
+              className="ep-btn ep-btn--outline"
+              onClick={() => setView({ name: 'map' })}
+            >
+              Open Map Viewer
+            </button>
+          </div>
         </div>
-        <nav className="topnav__links">
-          <button
-            type="button"
-            className={view.name === 'browser' || view.name === 'item' ? 'is-active' : ''}
-            onClick={() => setView({ name: 'browser' })}
-          >
-            <FolderOpen size={15} />
-            Content
-          </button>
-          <button
-            type="button"
-            className={view.name === 'compare' ? 'is-active' : ''}
-            onClick={() => setView({ name: 'compare' })}
-          >
-            <ArrowRightLeft size={15} />
-            Compare
-          </button>
-        </nav>
-        <div className="topnav__user">
-          {mode === 'demo' && <span className="demo-badge">Demo</span>}
-          <span>{userLabel}</span>
-          <button type="button" className="btn btn--ghost btn--sm" onClick={signOut}>
-            <LogOut size={14} />
-            Sign out
-          </button>
-        </div>
-      </header>
+      </PortalChrome>
+    )
+  }
 
-      <div className="subhead">
-        <h1>
-          {view.name === 'compare'
-            ? 'Compare webmaps'
-            : view.name === 'item'
-              ? 'Item'
-              : 'Content'}
-        </h1>
-        <p>
-          {view.name === 'compare'
-            ? 'Sleep lagen tussen webmaps, bewerk popups/queries, preview en undo.'
-            : 'Blader door items, open JSON, of selecteer webmaps om te vergelijken.'}
-        </p>
-      </div>
-
-      <main className="shell__main">
+  if (view.name === 'map') {
+    return (
+      <PortalChrome section="map" onNavigate={navigate} title="Map" bare>
         <Suspense fallback={<ViewFallback />}>
-          {view.name === 'browser' && (
-            <PortalBrowser
-              onOpenItem={(item: PortalItem) => setView({ name: 'item', itemId: item.id })}
-              onCompareMaps={(leftId, rightId) =>
-                setView({ name: 'compare', leftId, rightId })
-              }
-            />
-          )}
-          {view.name === 'item' && (
-            <ItemDetail
-              itemId={view.itemId}
-              onBack={() => setView({ name: 'browser' })}
-              onCompare={(id) => setView({ name: 'compare', leftId: id })}
-            />
-          )}
-          {view.name === 'compare' && (
-            <WebmapCompare
-              initialLeftId={view.leftId}
-              initialRightId={view.rightId}
-              onBack={() => setView({ name: 'browser' })}
-            />
-          )}
+          <MapViewerPage
+            itemId={view.itemId}
+            onOpenItem={(id) => setView({ name: 'item', itemId: id })}
+          />
         </Suspense>
-      </main>
-    </div>
+      </PortalChrome>
+    )
+  }
+
+  if (view.name === 'item') {
+    return (
+      <PortalChrome section="content" onNavigate={navigate} title="Content" bare>
+        <Suspense fallback={<ViewFallback />}>
+          <ItemDetailsPage
+            itemId={view.itemId}
+            onBack={() => setView({ name: 'content', tab: 'mine' })}
+            onOpenMap={openMap}
+          />
+        </Suspense>
+      </PortalChrome>
+    )
+  }
+
+  if (view.name === 'groups') {
+    return (
+      <PortalChrome
+        section="groups"
+        onNavigate={navigate}
+        title="Groups"
+        tabs={[...GROUPS_TABS]}
+        activeTab={view.tab}
+        onTabChange={(id) => setView({ name: 'groups', tab: id as GroupsTab })}
+      >
+        <Suspense fallback={<ViewFallback />}>
+          <GroupsPage
+            tab={view.tab}
+            onOpenGroupContent={() => setView({ name: 'content', tab: 'groups' })}
+          />
+        </Suspense>
+      </PortalChrome>
+    )
+  }
+
+  if (view.name === 'organization') {
+    return (
+      <PortalChrome
+        section="organization"
+        onNavigate={navigate}
+        title={portal?.name || 'Organization'}
+        tabs={[...ORG_TABS]}
+        activeTab={view.tab}
+        onTabChange={(id) => setView({ name: 'organization', tab: id as OrgTab })}
+      >
+        <Suspense fallback={<ViewFallback />}>
+          <OrganizationPage
+            tab={view.tab}
+            onOpenItem={openItem}
+            onViewAllContent={() => setView({ name: 'content', tab: 'org' })}
+          />
+        </Suspense>
+      </PortalChrome>
+    )
+  }
+
+  // content
+  return (
+    <PortalChrome
+      section="content"
+      onNavigate={navigate}
+      title="Content"
+      tabs={[...CONTENT_TABS]}
+      activeTab={view.tab}
+      onTabChange={(id) => setView({ name: 'content', tab: id as ContentTab })}
+    >
+      <Suspense fallback={<ViewFallback />}>
+        <ContentPage tab={view.tab} onOpenItem={openItem} onOpenMap={openMap} />
+      </Suspense>
+    </PortalChrome>
   )
 }

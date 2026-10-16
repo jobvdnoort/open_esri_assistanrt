@@ -2,7 +2,13 @@ import { getUserContent, searchGroups, searchItems } from '@esri/arcgis-rest-por
 import type { ArcGISIdentityManager } from '@esri/arcgis-rest-request'
 import type { PortalItem, PortalSelf } from '../types/arcgis'
 
-export type ContentScope = 'mine' | 'org' | 'groups'
+export type ContentScope = 'mine' | 'favorites' | 'org' | 'groups'
+
+export interface PortalFolder {
+  id: string
+  title: string
+  created?: number
+}
 
 export interface PortalGroup {
   id: string
@@ -15,6 +21,7 @@ export interface PortalGroup {
   modified?: number
   created?: number
   numItems?: number
+  thumbnail?: string
 }
 
 export interface ContentResult {
@@ -56,12 +63,73 @@ async function fetchFolderItems(
   return items
 }
 
-/** List all items the signed-in user owns (root + folders). More reliable than owner:me search on Enterprise. */
+export async function listMyFolders(auth: ArcGISIdentityManager): Promise<PortalFolder[]> {
+  const username = await auth.getUsername()
+  const root = await getUserContent({
+    owner: username,
+    start: 1,
+    num: 1,
+    authentication: auth,
+  })
+  return (root.folders ?? []).map((f) => ({
+    id: f.id,
+    title: f.title,
+    created: f.created,
+  }))
+}
+
+/** List items the signed-in user owns. Pass folderId for one folder; omit for all (root + folders). */
 export async function listMyContent(
   auth: ArcGISIdentityManager,
-  options?: { type?: string; query?: string },
+  options?: { type?: string; query?: string; folderId?: string | null },
 ): Promise<ContentResult> {
   const username = await auth.getUsername()
+
+  if (options?.folderId) {
+    const folderItems = await fetchFolderItems(auth, username, options.folderId)
+    let results = sortByModified(filterByType(folderItems, options?.type))
+    const q = options?.query?.trim().toLowerCase()
+    if (q) {
+      results = results.filter(
+        (item) =>
+          item.title.toLowerCase().includes(q) ||
+          item.id.toLowerCase().includes(q) ||
+          item.type.toLowerCase().includes(q) ||
+          (item.tags ?? []).some((t) => t.toLowerCase().includes(q)) ||
+          (item.snippet ?? '').toLowerCase().includes(q),
+      )
+    }
+    return {
+      results,
+      total: results.length,
+      queryUsed: `content/users/${username}/${options.folderId}`,
+      username,
+    }
+  }
+
+  if (options?.folderId === null) {
+    // Explicit root-only folder
+    const items = await fetchFolderItems(auth, username, undefined)
+    let results = sortByModified(filterByType(items, options?.type))
+    const q = options?.query?.trim().toLowerCase()
+    if (q) {
+      results = results.filter(
+        (item) =>
+          item.title.toLowerCase().includes(q) ||
+          item.id.toLowerCase().includes(q) ||
+          item.type.toLowerCase().includes(q) ||
+          (item.tags ?? []).some((t) => t.toLowerCase().includes(q)) ||
+          (item.snippet ?? '').toLowerCase().includes(q),
+      )
+    }
+    return {
+      results,
+      total: results.length,
+      queryUsed: `content/users/${username}`,
+      username,
+    }
+  }
+
   const root = await getUserContent({
     owner: username,
     start: 1,
@@ -108,6 +176,30 @@ export async function listMyContent(
   }
 }
 
+export async function listFavoriteContent(
+  auth: ArcGISIdentityManager,
+  options?: { type?: string; query?: string },
+): Promise<ContentResult> {
+  const username = await auth.getUsername()
+  const parts = [`owner:"${username}"`, 'typekeywords:"Favorite"']
+  if (options?.query?.trim()) parts.push(`(${options.query.trim()})`)
+  if (options?.type) parts.push(`type:"${options.type}"`)
+  const q = parts.join(' AND ')
+  const response = await searchItems({
+    q,
+    num: 100,
+    sortField: 'modified',
+    sortOrder: 'desc',
+    authentication: auth,
+  })
+  return {
+    results: response.results as PortalItem[],
+    total: response.total,
+    queryUsed: q,
+    username,
+  }
+}
+
 /** Portal item search with explicit username / orgid (avoid bare owner:me). */
 export async function searchPortalContent(
   auth: ArcGISIdentityManager,
@@ -118,13 +210,29 @@ export async function searchPortalContent(
     type?: string
     start?: number
     num?: number
+    folderId?: string | null
   },
 ): Promise<ContentResult> {
   const username = await auth.getUsername()
   const text = options.query?.trim() ?? ''
 
+  if (options.scope === 'favorites') {
+    return listFavoriteContent(auth, { type: options.type, query: options.query })
+  }
+
   if (options.scope === 'mine' && !text) {
-    return listMyContent(auth, { type: options.type })
+    return listMyContent(auth, {
+      type: options.type,
+      folderId: options.folderId,
+    })
+  }
+
+  if (options.scope === 'mine' && options.folderId !== undefined) {
+    return listMyContent(auth, {
+      type: options.type,
+      query: options.query,
+      folderId: options.folderId,
+    })
   }
 
   const parts: string[] = []
@@ -171,20 +279,36 @@ export async function searchPortalContent(
   }
 }
 
+function mapGroup(g: {
+  id: string
+  title: string
+  owner: string
+  access?: string
+  description?: string
+  snippet?: string
+  modified?: number
+  created?: number
+  isInvitationOnly?: boolean
+  thumbnail?: string
+}): PortalGroup {
+  return {
+    id: g.id,
+    title: g.title,
+    owner: g.owner,
+    access: g.access,
+    description: g.description,
+    snippet: g.snippet,
+    modified: g.modified,
+    created: g.created,
+    isInvitationOnly: g.isInvitationOnly,
+    thumbnail: g.thumbnail,
+  }
+}
+
 export async function listUserGroups(auth: ArcGISIdentityManager): Promise<PortalGroup[]> {
   const user = await auth.getUser()
   if (user.groups?.length) {
-    return user.groups.map((g) => ({
-      id: g.id,
-      title: g.title,
-      owner: g.owner,
-      access: g.access,
-      description: g.description,
-      snippet: g.snippet,
-      modified: g.modified,
-      created: g.created,
-      isInvitationOnly: g.isInvitationOnly,
-    }))
+    return user.groups.map((g) => mapGroup(g))
   }
 
   const username = user.username || (await auth.getUsername())
@@ -196,17 +320,29 @@ export async function listUserGroups(auth: ArcGISIdentityManager): Promise<Porta
     authentication: auth,
   })
 
-  return response.results.map((g) => ({
-    id: g.id,
-    title: g.title,
-    owner: g.owner,
-    access: g.access,
-    description: g.description,
-    snippet: g.snippet,
-    modified: g.modified,
-    created: g.created,
-    isInvitationOnly: g.isInvitationOnly,
-  }))
+  return response.results.map((g) => mapGroup(g))
+}
+
+export async function listOrgGroups(
+  auth: ArcGISIdentityManager,
+  portal: PortalSelf | null,
+  options?: { query?: string },
+): Promise<PortalGroup[]> {
+  const parts: string[] = []
+  if (portal?.id) parts.push(`orgid:${portal.id}`)
+  else {
+    const username = await auth.getUsername()
+    parts.push(`owner:"${username}"`)
+  }
+  if (options?.query?.trim()) parts.push(`(${options.query.trim()})`)
+  const response = await searchGroups({
+    q: parts.join(' AND '),
+    num: 100,
+    sortField: 'title',
+    sortOrder: 'asc',
+    authentication: auth,
+  })
+  return response.results.map((g) => mapGroup(g))
 }
 
 export async function searchGroupItems(

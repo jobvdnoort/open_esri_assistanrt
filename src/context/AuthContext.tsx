@@ -9,7 +9,7 @@ import {
   type ReactNode,
 } from 'react'
 import { formatAuthError } from '../lib/authErrors'
-import type { ContentResult, ContentScope, PortalGroup } from '../lib/content'
+import type { ContentResult, ContentScope, PortalFolder, PortalGroup } from '../lib/content'
 import {
   beginPortalOAuth,
   completePortalOAuth,
@@ -55,8 +55,11 @@ interface AuthContextValue {
     scope: ContentScope
     query?: string
     type?: string
+    folderId?: string | null
   }) => Promise<ContentResult>
+  listFolders: () => Promise<PortalFolder[]>
   listGroups: () => Promise<PortalGroup[]>
+  listOrgGroups: (query?: string) => Promise<PortalGroup[]>
   browseGroupItems: (
     groupId: string,
     options?: { query?: string; type?: string },
@@ -313,7 +316,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [])
 
   const browseContentFn = useCallback(
-    async (options: { scope: ContentScope; query?: string; type?: string }) => {
+    async (options: {
+      scope: ContentScope
+      query?: string
+      type?: string
+      folderId?: string | null
+    }) => {
       if (mode === 'demo') {
         const { demoSearch } = await import('../lib/demo')
         const result = demoSearch(options.query ?? '', options.type)
@@ -331,6 +339,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     [auth, mode, portal],
   )
 
+  const listFoldersFn = useCallback(async () => {
+    if (mode === 'demo') {
+      return [
+        { id: 'demo-folder-1', title: 'Project Centrum' },
+        { id: 'demo-folder-2', title: '3D data' },
+      ] satisfies PortalFolder[]
+    }
+    if (!auth) throw new Error('Niet ingelogd')
+    const { listMyFolders } = await import('../lib/content')
+    return listMyFolders(auth)
+  }, [auth, mode])
+
   const listGroupsFn = useCallback(async () => {
     if (mode === 'demo') {
       return [
@@ -342,12 +362,35 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           snippet: 'Voorbeeldgroep in demomodus',
           modified: Date.now(),
         },
+        {
+          id: 'demo-group-2',
+          title: '3D Stylen',
+          owner: 'demo.user',
+          access: 'org',
+          snippet: 'Stijlen en symbologie voor 3D scenes',
+          modified: Date.now() - 86400000,
+        },
       ] satisfies PortalGroup[]
     }
     if (!auth) throw new Error('Niet ingelogd')
     const { listUserGroups } = await import('../lib/content')
     return listUserGroups(auth)
   }, [auth, mode])
+
+  const listOrgGroupsFn = useCallback(
+    async (query?: string) => {
+      if (mode === 'demo') {
+        const groups = await listGroupsFn()
+        if (!query?.trim()) return groups
+        const q = query.toLowerCase()
+        return groups.filter((g) => g.title.toLowerCase().includes(q))
+      }
+      if (!auth) throw new Error('Niet ingelogd')
+      const { listOrgGroups } = await import('../lib/content')
+      return listOrgGroups(auth, portal, { query })
+    },
+    [auth, mode, portal, listGroupsFn],
+  )
 
   const browseGroupItemsFn = useCallback(
     async (groupId: string, options?: { query?: string; type?: string }) => {
@@ -455,7 +498,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       enterDemo,
       signOut,
       browseContent: browseContentFn,
+      listFolders: listFoldersFn,
       listGroups: listGroupsFn,
+      listOrgGroups: listOrgGroupsFn,
       browseGroupItems: browseGroupItemsFn,
       searchItems: searchItemsFn,
       getItem: getItemFn,
@@ -479,7 +524,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       enterDemo,
       signOut,
       browseContentFn,
+      listFoldersFn,
       listGroupsFn,
+      listOrgGroupsFn,
       browseGroupItemsFn,
       searchItemsFn,
       getItemFn,

@@ -1,5 +1,5 @@
 :root {
-  /* Esri / Calcite-inspired portal palette */
+  /* Login + shared tokens (portal chrome uses portal.css) */
   --esri-blue: #0079c1;
   --esri-blue-dark: #005e95;
   --esri-blue-deep: #004874;
