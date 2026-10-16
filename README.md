@@ -30,7 +30,7 @@ Gebruik dan **OAuth**:
 2. Type: Web mapping / Application
 3. Redirect URI: `http://127.0.0.1:5173/` (en eventueel `http://localhost:5173/`)
 4. Kopieer de **Client ID** naar het OAuth-tabblad in de app
-5. Klik **Inloggen met portal (OAuth)** — er opent een portal-login (incl. SAML)
+5. Klik **Inloggen met portal (OAuth)** — je gaat in hetzelfde tabblad naar de portal-login (incl. SAML) en komt daarna terug
 
 Alternatief: tab **Token** met een handmatig gegenereerde portal-token.
 

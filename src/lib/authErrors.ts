@@ -43,6 +43,19 @@ export function formatAuthError(err: unknown): string {
     return 'OAuth geannuleerd of geweigerd in het portaal.'
   }
 
+  if (
+    combined.includes('invalid pkce') ||
+    combined.includes('code_challenge') ||
+    combined.includes('code_verifier')
+  ) {
+    return (
+      'OAuth PKCE mislukt (code_verifier kwam niet overeen). ' +
+      'Probeer opnieuw via “Inloggen met portal (OAuth)”. ' +
+      'Gebruik exact dezelfde URL als de redirect URI in de portal-app ' +
+      `(nu: ${typeof window !== 'undefined' ? window.location.origin + '/' : 'http://127.0.0.1:5173/'}).`
+    )
+  }
+
   if (combined.includes('redirect') && combined.includes('uri')) {
     return (
       'Redirect URI niet toegestaan. Voeg in de portal-app exact deze redirect toe: ' +

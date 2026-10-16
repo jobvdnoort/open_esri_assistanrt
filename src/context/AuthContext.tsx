@@ -132,13 +132,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     let cancelled = false
 
     ;(async () => {
-      // OAuth popup callback: finish auth in the popup and close.
+      // Full-page OAuth return: exchange ?code= once (shared promise), then continue into the app.
       if (isOAuthCallbackUrl() && loadOAuthPending()) {
         try {
-          await completePortalOAuth()
-          // completeOAuth2 with popup:true posts back to opener and closes.
+          const manager = await completePortalOAuth()
+          // Always persist even if this effect instance was cleaned up (StrictMode).
+          await applySession(manager)
         } catch (err) {
-          if (!cancelled) setError(formatAuthError(err))
+          if (!cancelled) {
+            setError(formatAuthError(err))
+            const clean = `${window.location.origin}${window.location.pathname}`
+            window.history.replaceState(window.history.state, '', clean)
+          }
         } finally {
           if (!cancelled) setLoading(false)
         }
@@ -186,7 +191,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return () => {
       cancelled = true
     }
-  }, [])
+  }, [applySession])
 
   const saveLoginPrefs = useCallback((partial: Partial<LoginPrefs>) => {
     setLoginPrefs((prev) => {
@@ -221,20 +226,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setError(null)
       saveLoginPrefs({ portalUrl: portalInput, clientId })
       try {
-        const manager = await beginPortalOAuth(portalInput, clientId)
-        if (!manager) {
-          throw new Error('OAuth-popup geblokkeerd of gesloten. Sta popups toe en probeer opnieuw.')
-        }
-        await applySession(manager)
+        // Navigates away to the portal; session is applied on return via completePortalOAuth.
+        await beginPortalOAuth(portalInput, clientId)
       } catch (err) {
         const message = formatAuthError(err)
         setError(message)
-        throw new Error(message)
-      } finally {
         setLoading(false)
+        throw new Error(message)
       }
     },
-    [applySession, saveLoginPrefs],
+    [saveLoginPrefs],
   )
 
   const signInToken = useCallback(

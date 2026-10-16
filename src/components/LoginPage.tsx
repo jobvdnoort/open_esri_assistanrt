@@ -134,13 +134,17 @@ export function LoginPage() {
               />
             </label>
             <p className="muted login__hint">
-              Content → Add item → Application → Redirect URI: <code>{redirectUri}</code> (en eventueel
-              http://localhost:5173/). Gebruik daarna de Client ID.
+              Content → Add item → Application → Redirect URI exact:{' '}
+              <code>{redirectUri}</code>
+              {redirectUri.includes('127.0.0.1')
+                ? ' (voeg ook http://localhost:5173/ toe als je die URL gebruikt)'
+                : ' (voeg ook http://127.0.0.1:5173/ toe als je die URL gebruikt)'}
+              . Na login kom je terug in dit tabblad — geen popup.
             </p>
             {(localError || error) && <p className="form-error">{localError || error}</p>}
             <button type="submit" className="btn btn--primary" disabled={loading}>
               <KeyRound size={16} />
-              {loading ? 'Bezig…' : 'Inloggen met portal (OAuth)'}
+              {loading ? 'Doorsturen…' : 'Inloggen met portal (OAuth)'}
             </button>
           </form>
         )}
