@@ -30,45 +30,58 @@ export default function App() {
     return <LoginPage />
   }
 
+  const userLabel = portal?.user?.fullName || portal?.user?.username || 'Gebruiker'
+
   return (
     <div className="shell">
-      <aside className="shell__nav">
-        <div className="shell__brand">
-          <MapPinned size={22} strokeWidth={1.7} />
-          <div>
-            <strong>Open Esri Assistant</strong>
-            <span>{portal?.name ?? 'Portaal'}</span>
-          </div>
+      <header className="topnav">
+        <div className="topnav__brand">
+          <MapPinned size={20} strokeWidth={1.8} />
+          <strong>Open Esri Assistant</strong>
+          <span className="topnav__org">{portal?.name ?? 'Portaal'}</span>
         </div>
-
-        <nav className="shell__links">
+        <nav className="topnav__links">
           <button
             type="button"
             className={view.name === 'browser' || view.name === 'item' ? 'is-active' : ''}
             onClick={() => setView({ name: 'browser' })}
           >
-            <FolderOpen size={16} />
-            Inhoud
+            <FolderOpen size={15} />
+            Content
           </button>
           <button
             type="button"
             className={view.name === 'compare' ? 'is-active' : ''}
             onClick={() => setView({ name: 'compare' })}
           >
-            <ArrowRightLeft size={16} />
-            Vergelijk
+            <ArrowRightLeft size={15} />
+            Compare
           </button>
         </nav>
-
-        <div className="shell__user">
+        <div className="topnav__user">
           {mode === 'demo' && <span className="demo-badge">Demo</span>}
-          <span>{portal?.user?.fullName || portal?.user?.username || 'Gebruiker'}</span>
+          <span>{userLabel}</span>
           <button type="button" className="btn btn--ghost btn--sm" onClick={signOut}>
             <LogOut size={14} />
-            Uitloggen
+            Sign out
           </button>
         </div>
-      </aside>
+      </header>
+
+      <div className="subhead">
+        <h1>
+          {view.name === 'compare'
+            ? 'Compare webmaps'
+            : view.name === 'item'
+              ? 'Item'
+              : 'Content'}
+        </h1>
+        <p>
+          {view.name === 'compare'
+            ? 'Sleep lagen tussen webmaps, bewerk popups/queries, preview en undo.'
+            : 'Blader door items, open JSON, of selecteer webmaps om te vergelijken.'}
+        </p>
+      </div>
 
       <main className="shell__main">
         {view.name === 'browser' && (

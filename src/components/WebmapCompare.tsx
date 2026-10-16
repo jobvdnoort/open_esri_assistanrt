@@ -1,24 +1,32 @@
 import {
   ArrowLeft,
-  ArrowLeftRight,
+  Eye,
   FolderInput,
+  Redo2,
   RotateCcw,
   Save,
+  Undo2,
 } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { useAuth } from '../context/AuthContext'
-import type { LayerPath, PortalItem, WebMapData } from '../types/arcgis'
+import { useHistoryStack } from '../hooks/useHistoryStack'
+import type { PaneSide } from '../lib/dnd'
 import {
   countLayers,
   ensureWebMapShape,
   getLayerAtPath,
   insertLayer,
+  isGroupLayer,
   moveLayer,
   removeLayerAtPath,
   reorderSibling,
 } from '../lib/webmap'
+import type { LayerPath, OperationalLayer, PortalItem, WebMapData } from '../types/arcgis'
+import { ItemPicker } from './ItemPicker'
 import { JsonViewer } from './JsonViewer'
-import { LayerTree, type DropPosition } from './LayerTree'
+import { LayerEditor } from './LayerEditor'
+import { LayerTree, type DropPosition, type TreeDropEvent } from './LayerTree'
+import { MapPreview } from './MapPreview'
 
 interface WebmapCompareProps {
   initialLeftId?: string
@@ -26,63 +34,84 @@ interface WebmapCompareProps {
   onBack: () => void
 }
 
-interface PaneState {
+interface PaneMeta {
   itemId: string
   item: PortalItem | null
-  data: WebMapData | null
   selected: LayerPath | null
-  dirty: boolean
   loading: boolean
   error: string | null
+  baseline: string
 }
 
-const emptyPane = (itemId = ''): PaneState => ({
+const emptyMeta = (itemId = ''): PaneMeta => ({
   itemId,
   item: null,
-  data: null,
   selected: null,
-  dirty: false,
   loading: false,
   error: null,
+  baseline: '',
 })
 
+function snapshot(data: WebMapData | null): string {
+  return JSON.stringify(data?.operationalLayers ?? [])
+}
+
 export function WebmapCompare({ initialLeftId, initialRightId, onBack }: WebmapCompareProps) {
-  const { searchItems, getWebMap, saveWebMap, mode, resetDemo } = useAuth()
-  const [webMaps, setWebMaps] = useState<PortalItem[]>([])
-  const [left, setLeft] = useState<PaneState>(() => emptyPane(initialLeftId ?? ''))
-  const [right, setRight] = useState<PaneState>(() => emptyPane(initialRightId ?? ''))
+  const { getWebMap, saveWebMap, mode, resetDemo, auth, portalUrl } = useAuth()
+  const {
+    present: leftData,
+    push: pushLeft,
+    undo: undoLeft,
+    redo: redoLeft,
+    reset: resetLeft,
+    canUndo: canUndoLeft,
+    canRedo: canRedoLeft,
+  } = useHistoryStack<WebMapData | null>(null)
+  const {
+    present: rightData,
+    push: pushRight,
+    undo: undoRight,
+    redo: redoRight,
+    reset: resetRight,
+    canUndo: canUndoRight,
+    canRedo: canRedoRight,
+  } = useHistoryStack<WebMapData | null>(null)
+  const [left, setLeft] = useState<PaneMeta>(() => emptyMeta(initialLeftId ?? ''))
+  const [right, setRight] = useState<PaneMeta>(() => emptyMeta(initialRightId ?? ''))
   const [status, setStatus] = useState<string | null>(null)
-  const [savingSide, setSavingSide] = useState<'left' | 'right' | null>(null)
-  const [preview, setPreview] = useState<'left' | 'right' | null>(null)
+  const [savingSide, setSavingSide] = useState<PaneSide | null>(null)
+  const [previewSide, setPreviewSide] = useState<PaneSide | null>(null)
+  const [activeEditor, setActiveEditor] = useState<PaneSide>('left')
+  const [showJson, setShowJson] = useState(false)
 
-  useEffect(() => {
-    void searchItems('', 'Web Map').then((r) => setWebMaps(r.results))
-  }, [searchItems])
+  const leftDirty = left.baseline !== '' && snapshot(leftData) !== left.baseline
+  const rightDirty = right.baseline !== '' && snapshot(rightData) !== right.baseline
 
-  const loadPane = async (
-    side: 'left' | 'right',
-    itemId: string,
-  ) => {
+  const loadPane = async (side: PaneSide, itemId: string) => {
     const setter = side === 'left' ? setLeft : setRight
+    const reset = side === 'left' ? resetLeft : resetRight
     if (!itemId) {
-      setter(emptyPane())
+      setter(emptyMeta())
+      reset(null)
       return
     }
-    setter((prev) => ({ ...emptyPane(itemId), loading: true, dirty: prev.dirty && prev.itemId === itemId }))
+    setter({ ...emptyMeta(itemId), loading: true })
     try {
       const { item, data } = await getWebMap(itemId)
+      const shaped = ensureWebMapShape(data)
+      reset(shaped)
       setter({
         itemId,
         item,
-        data: ensureWebMapShape(data),
         selected: null,
-        dirty: false,
         loading: false,
         error: null,
+        baseline: snapshot(shaped),
       })
     } catch (err) {
+      reset(null)
       setter({
-        ...emptyPane(itemId),
+        ...emptyMeta(itemId),
         loading: false,
         error: err instanceof Error ? err.message : 'Laden mislukt',
       })
@@ -92,145 +121,120 @@ export function WebmapCompare({ initialLeftId, initialRightId, onBack }: WebmapC
   useEffect(() => {
     if (initialLeftId) void loadPane('left', initialLeftId)
     if (initialRightId) void loadPane('right', initialRightId)
-    // only on mount / initial ids
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initialLeftId, initialRightId])
 
-  const copyFromTo = (
-    from: PaneState,
-    to: PaneState,
-    setTo: typeof setRight,
-    directionLabel: string,
-    sourcePath?: LayerPath | null,
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const mod = e.metaKey || e.ctrlKey
+      if (!mod) return
+      if (e.key === 'z' && !e.shiftKey) {
+        e.preventDefault()
+        if (activeEditor === 'left' ? canUndoLeft : canUndoRight) {
+          ;(activeEditor === 'left' ? undoLeft : undoRight)()
+          setStatus('Ongedaan gemaakt')
+        }
+      }
+      if ((e.key === 'z' && e.shiftKey) || e.key === 'y') {
+        e.preventDefault()
+        if (activeEditor === 'left' ? canRedoLeft : canRedoRight) {
+          ;(activeEditor === 'left' ? redoLeft : redoRight)()
+          setStatus('Opnieuw uitgevoerd')
+        }
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [
+    activeEditor,
+    canUndoLeft,
+    canUndoRight,
+    canRedoLeft,
+    canRedoRight,
+    undoLeft,
+    undoRight,
+    redoLeft,
+    redoRight,
+  ])
+
+  const commitLayers = (
+    side: PaneSide,
+    nextLayers: OperationalLayer[],
+    message: string,
+    selected: LayerPath | null = null,
   ) => {
-    const path = sourcePath ?? from.selected
-    if (!from.data || !to.data || !path) {
-      setStatus('Selecteer eerst een laag of groep om te kopiëren.')
-      return
-    }
-    const layer = getLayerAtPath(from.data.operationalLayers ?? [], path)
-    if (!layer) {
-      setStatus('Geselecteerde laag niet gevonden.')
+    const current = side === 'left' ? leftData : rightData
+    const push = side === 'left' ? pushLeft : pushRight
+    const setter = side === 'left' ? setLeft : setRight
+    if (!current) return
+    push({ ...current, operationalLayers: nextLayers })
+    setter((prev) => ({ ...prev, selected }))
+    setStatus(message)
+  }
+
+  const handleDrop = (side: PaneSide, event: TreeDropEvent) => {
+    const data = side === 'left' ? leftData : rightData
+    if (!data) return
+    const layers = data.operationalLayers ?? []
+
+    if (event.samePane) {
+      commitLayers(
+        side,
+        moveLayer(layers, event.payloadPath, event.targetPath, event.position),
+        'Laag verplaatst binnen deze webmap.',
+      )
       return
     }
 
-    const targetPath = to.selected
-    const targetLayer = targetPath
-      ? getLayerAtPath(to.data.operationalLayers ?? [], targetPath)
-      : null
-    const position =
-      targetLayer?.layerType === 'GroupLayer' || Array.isArray(targetLayer?.layers)
-        ? 'into'
-        : 'root'
+    let position: DropPosition | 'root' = event.position
+    if (event.position === 'into' && event.targetPath) {
+      const target = getLayerAtPath(layers, event.targetPath)
+      if (!target || !isGroupLayer(target)) position = 'after'
+    }
 
-    const nextLayers = insertLayer(
-      to.data.operationalLayers ?? [],
-      layer,
-      position === 'into' ? targetPath : null,
-      position,
+    commitLayers(
+      side,
+      insertLayer(
+        layers,
+        event.payloadLayer,
+        position === 'root' ? null : event.targetPath,
+        position,
+      ),
+      `Laag “${event.payloadLayer.title || event.payloadLayer.id}” gekopieerd vanuit de andere webmap.`,
     )
-
-    setTo((prev) => ({
-      ...prev,
-      data: { ...prev.data!, operationalLayers: nextLayers },
-      dirty: true,
-    }))
-
-    const name = layer.title || layer.id || 'item'
-    const kind = layer.layerType === 'GroupLayer' ? 'groep' : 'laag'
-    const into =
-      position === 'into' && targetLayer
-        ? ` in “${targetLayer.title || targetLayer.id}”`
-        : ' naar de root'
-    setStatus(`${kind[0].toUpperCase()}${kind.slice(1)} “${name}” gekopieerd ${directionLabel}${into}. Vergeet niet op te slaan.`)
   }
 
-  const moveWithin = (
-    side: 'left' | 'right',
-    from: LayerPath,
-    to: LayerPath | null,
-    position: DropPosition | 'root',
-  ) => {
-    const setter = side === 'left' ? setLeft : setRight
-    setter((prev) => {
-      if (!prev.data) return prev
-      const layers = prev.data.operationalLayers ?? []
-      const source = getLayerAtPath(layers, from)
-      const targetTitle =
-        to && position === 'into' ? getLayerAtPath(layers, to)?.title || 'groep' : null
-      const nextLayers = moveLayer(layers, from, to, position)
-      const name = source?.title || source?.id || 'item'
-      const dest =
-        position === 'root'
-          ? 'naar root'
-          : position === 'into'
-            ? `in “${targetTitle}”`
-            : position === 'before'
-              ? 'vóór doel'
-              : 'ná doel'
-      queueMicrotask(() =>
-        setStatus(`“${name}” verplaatst ${dest} in deze webmap. Vergeet niet op te slaan.`),
-      )
-      return {
-        ...prev,
-        data: { ...prev.data, operationalLayers: nextLayers },
-        selected: null,
-        dirty: true,
-      }
-    })
-  }
-
-  const reorderWithin = (side: 'left' | 'right', path: LayerPath, direction: -1 | 1) => {
-    const setter = side === 'left' ? setLeft : setRight
-    const index = path[path.length - 1]
+  const updateSelectedLayer = (side: PaneSide, nextLayer: OperationalLayer) => {
+    const meta = side === 'left' ? left : right
+    const data = side === 'left' ? leftData : rightData
+    if (!data || !meta.selected) return
+    const layers = structuredClone(data.operationalLayers ?? [])
+    const parentPath = meta.selected.slice(0, -1)
+    const index = meta.selected[meta.selected.length - 1]
     if (index === undefined) return
-    setter((prev) => {
-      if (!prev.data) return prev
-      const nextLayers = reorderSibling(prev.data.operationalLayers ?? [], path, direction)
-      return {
-        ...prev,
-        data: { ...prev.data, operationalLayers: nextLayers },
-        selected: [...path.slice(0, -1), index + direction],
-        dirty: true,
-      }
-    })
+    if (parentPath.length === 0) layers[index] = nextLayer
+    else {
+      const parent = getLayerAtPath(layers, parentPath)
+      if (!parent?.layers) return
+      parent.layers[index] = nextLayer
+    }
+    commitLayers(side, layers, 'Laageigenschappen bijgewerkt.', meta.selected)
   }
 
-  const deleteWithin = (side: 'left' | 'right', path: LayerPath) => {
+  const saveSide = async (side: PaneSide) => {
+    const meta = side === 'left' ? left : right
+    const data = side === 'left' ? leftData : rightData
     const setter = side === 'left' ? setLeft : setRight
-    setter((prev) => {
-      if (!prev.data) return prev
-      const layers = prev.data.operationalLayers ?? []
-      const source = getLayerAtPath(layers, path)
-      const nextLayers = removeLayerAtPath(layers, path)
-      const name = source?.title || source?.id || 'item'
-      const kind =
-        source?.layerType === 'GroupLayer' || Array.isArray(source?.layers) ? 'Groep' : 'Laag'
-      queueMicrotask(() =>
-        setStatus(`${kind} “${name}” verwijderd uit deze webmap. Vergeet niet op te slaan.`),
-      )
-      return {
-        ...prev,
-        data: { ...prev.data, operationalLayers: nextLayers },
-        selected: null,
-        dirty: true,
-      }
-    })
-  }
-
-  const saveSide = async (side: 'left' | 'right') => {
-    const pane = side === 'left' ? left : right
-    const setter = side === 'left' ? setLeft : setRight
-    if (!pane.data || !pane.itemId) return
+    if (!data || !meta.itemId) return
     setSavingSide(side)
-    setStatus(null)
     try {
-      await saveWebMap(pane.itemId, ensureWebMapShape(pane.data))
-      setter((prev) => ({ ...prev, dirty: false }))
+      const shaped = ensureWebMapShape(data)
+      await saveWebMap(meta.itemId, shaped)
+      setter((prev) => ({ ...prev, baseline: snapshot(shaped) }))
       setStatus(
         mode === 'demo'
-          ? `${pane.item?.title ?? 'Webmap'} lokaal opgeslagen.`
-          : `${pane.item?.title ?? 'Webmap'} opgeslagen in het portaal.`,
+          ? `${meta.item?.title ?? 'Webmap'} lokaal opgeslagen.`
+          : `${meta.item?.title ?? 'Webmap'} opgeslagen in het portaal.`,
       )
     } catch (err) {
       setStatus(err instanceof Error ? err.message : 'Opslaan mislukt')
@@ -240,93 +244,154 @@ export function WebmapCompare({ initialLeftId, initialRightId, onBack }: WebmapC
   }
 
   const renderPane = (
-    side: 'left' | 'right',
-    pane: PaneState,
-    setPane: typeof setLeft,
-    copyLabel: string,
-    onCopy: (path: LayerPath) => void,
+    side: PaneSide,
+    meta: PaneMeta,
+    data: WebMapData | null,
+    dirty: boolean,
+    canUndo: boolean,
+    canRedo: boolean,
+    onUndo: () => void,
+    onRedo: () => void,
   ) => {
-    const counts = pane.data ? countLayers(pane.data.operationalLayers) : null
+    const counts = data ? countLayers(data.operationalLayers) : null
+    const selectedLayer =
+      data && meta.selected ? getLayerAtPath(data.operationalLayers ?? [], meta.selected) : null
+
     return (
-      <section className="compare-pane">
+      <section
+        className={`compare-pane ${activeEditor === side ? 'compare-pane--active' : ''}`}
+        onMouseDown={() => setActiveEditor(side)}
+      >
         <div className="compare-pane__toolbar">
-          <label>
-            Webmap
-            <select
-              value={pane.itemId}
-              onChange={(e) => void loadPane(side, e.target.value)}
-            >
-              <option value="">Kies een webmap…</option>
-              {webMaps.map((wm) => (
-                <option key={wm.id} value={wm.id}>
-                  {wm.title}
-                </option>
-              ))}
-            </select>
-          </label>
+          <ItemPicker
+            label={side === 'left' ? 'Webmap links' : 'Webmap rechts'}
+            value={meta.itemId}
+            itemTypes={['Web Map', 'Web Scene']}
+            placeholder="Zoek webmap of scene…"
+            onChange={(id) => void loadPane(side, id)}
+          />
           <div className="compare-pane__stats">
             {counts && (
               <span>
                 {counts.layers} lagen · {counts.groups} groepen
               </span>
             )}
-            {pane.dirty && <span className="dirty-dot">Niet opgeslagen</span>}
+            {dirty && <span className="dirty-dot">Niet opgeslagen</span>}
           </div>
-          <button
-            type="button"
-            className="btn btn--primary btn--sm"
-            disabled={!pane.dirty || savingSide === side}
-            onClick={() => void saveSide(side)}
-          >
-            <Save size={14} />
-            {savingSide === side ? 'Opslaan…' : 'Opslaan'}
-          </button>
+          <div className="compare-pane__history">
+            <button
+              type="button"
+              className="btn btn--ghost btn--icon"
+              disabled={!canUndo}
+              title="Ongedaan maken (Ctrl+Z)"
+              onClick={() => {
+                onUndo()
+                setStatus('Ongedaan gemaakt')
+              }}
+            >
+              <Undo2 size={15} />
+            </button>
+            <button
+              type="button"
+              className="btn btn--ghost btn--icon"
+              disabled={!canRedo}
+              title="Opnieuw (Ctrl+Y)"
+              onClick={() => {
+                onRedo()
+                setStatus('Opnieuw uitgevoerd')
+              }}
+            >
+              <Redo2 size={15} />
+            </button>
+            <button
+              type="button"
+              className="btn btn--ghost btn--sm"
+              disabled={!data}
+              onClick={() => setPreviewSide(side)}
+            >
+              <Eye size={14} />
+              Preview
+            </button>
+            <button
+              type="button"
+              className="btn btn--primary btn--sm"
+              disabled={!dirty || savingSide === side}
+              onClick={() => void saveSide(side)}
+            >
+              <Save size={14} />
+              {savingSide === side ? 'Opslaan…' : 'Opslaan'}
+            </button>
+          </div>
         </div>
 
-        {pane.loading && <p className="muted empty-panel">Webmap laden…</p>}
-        {pane.error && <p className="form-error">{pane.error}</p>}
+        {meta.loading && <p className="muted empty-panel">Webmap laden…</p>}
+        {meta.error && <p className="form-error">{meta.error}</p>}
 
-        {pane.data && !pane.loading && (
+        {data && !meta.loading && (
           <>
             <div className="compare-pane__hint">
               <FolderInput size={14} />
               <span>
-                Binnen deze webmap: sleep lagen/groepen, of ↑↓ / verplaats-icoon. Tussen webmaps:
-                knop {copyLabel}. Selecteer op de andere kant een groep om erín te plakken.
+                Sleep lagen tussen groepen of naar de andere webmap. Ctrl+Z / Ctrl+Y voor undo/redo.
               </span>
             </div>
             <LayerTree
-              layers={pane.data.operationalLayers ?? []}
-              selectedPath={pane.selected}
-              onSelect={(path) => setPane((prev) => ({ ...prev, selected: path }))}
-              onCopy={(path) => {
-                setPane((prev) => ({ ...prev, selected: path }))
-                onCopy(path)
+              layers={data.operationalLayers ?? []}
+              selectedPath={meta.selected}
+              side={side}
+              onSelect={(path) => {
+                setActiveEditor(side)
+                ;(side === 'left' ? setLeft : setRight)((prev) => ({ ...prev, selected: path }))
               }}
-              copyLabel={copyLabel}
               enableReorder
-              onReorder={(path, direction) => reorderWithin(side, path, direction)}
-              onMove={(from, to, position) => moveWithin(side, from, to, position)}
-              onDelete={(path) => deleteWithin(side, path)}
+              onReorder={(path, direction) => {
+                const next = reorderSibling(data.operationalLayers ?? [], path, direction)
+                const index = path[path.length - 1]
+                if (index === undefined) return
+                commitLayers(
+                  side,
+                  next,
+                  'Volgorde aangepast.',
+                  [...path.slice(0, -1), index + direction],
+                )
+              }}
+              onMove={(from, to, position) => {
+                commitLayers(
+                  side,
+                  moveLayer(data.operationalLayers ?? [], from, to, position),
+                  'Laag verplaatst.',
+                )
+              }}
+              onDropLayer={(event) => handleDrop(side, event)}
+              onDelete={(path) => {
+                const source = getLayerAtPath(data.operationalLayers ?? [], path)
+                const kind = source && isGroupLayer(source) ? 'Groep' : 'Laag'
+                commitLayers(
+                  side,
+                  removeLayerAtPath(data.operationalLayers ?? [], path),
+                  `${kind} “${source?.title || source?.id || 'item'}” verwijderd.`,
+                )
+              }}
             />
-            <button
-              type="button"
-              className="btn btn--ghost btn--sm"
-              onClick={() => setPreview(preview === side ? null : side)}
-            >
-              {preview === side ? 'Verberg JSON' : 'Toon geselecteerde JSON'}
-            </button>
-            {preview === side && pane.selected && (
-              <JsonViewer
-                value={getLayerAtPath(pane.data.operationalLayers ?? [], pane.selected)}
-                label="Selectie"
-              />
+            {showJson && selectedLayer && (
+              <JsonViewer value={selectedLayer} label="Geselecteerde laag" />
             )}
           </>
         )}
       </section>
     )
   }
+
+  const editorMeta = activeEditor === 'left' ? left : right
+  const editorData = activeEditor === 'left' ? leftData : rightData
+  const editorLayer =
+    editorData && editorMeta.selected
+      ? getLayerAtPath(editorData.operationalLayers ?? [], editorMeta.selected)
+      : null
+
+  const previewMeta = previewSide === 'left' ? left : right
+  const previewData = previewSide === 'left' ? leftData : rightData
+  const previewDirty = previewSide === 'left' ? leftDirty : rightDirty
 
   return (
     <div className="compare">
@@ -336,9 +401,9 @@ export function WebmapCompare({ initialLeftId, initialRightId, onBack }: WebmapC
           Terug
         </button>
         <div>
-          <h2>Webmaps naast elkaar</h2>
+          <h2>Webmaps vergelijken</h2>
           <p className="muted">
-            Verplaats lagen binnen een webmap, of kopieer tussen webmaps — zonder JSON te bewerken.
+            Sleep lagen tussen kaarten, bewerk popups/queries, preview en undo altijd bij de hand.
           </p>
         </div>
         <div className="compare__actions">
@@ -357,36 +422,62 @@ export function WebmapCompare({ initialLeftId, initialRightId, onBack }: WebmapC
               Reset demo
             </button>
           )}
-          <button
-            type="button"
-            className="btn btn--secondary"
-            disabled={!left.selected || !right.data}
-            onClick={() => copyFromTo(left, right, setRight, 'naar rechts')}
-          >
-            <ArrowLeftRight size={16} />
-            Links → rechts
-          </button>
-          <button
-            type="button"
-            className="btn btn--secondary"
-            disabled={!right.selected || !left.data}
-            onClick={() => copyFromTo(right, left, setLeft, 'naar links')}
-          >
-            Rechts → links
+          <button type="button" className="btn btn--secondary" onClick={() => setShowJson((v) => !v)}>
+            {showJson ? 'Verberg JSON' : 'Toon JSON'}
           </button>
         </div>
       </header>
 
       {status && <p className="form-ok compare__status">{status}</p>}
 
-      <div className="compare__grid">
-        {renderPane('left', left, setLeft, '→', (path) =>
-          copyFromTo(left, right, setRight, 'naar rechts', path),
-        )}
-        {renderPane('right', right, setRight, '←', (path) =>
-          copyFromTo(right, left, setLeft, 'naar links', path),
-        )}
+      <div className="compare__workspace">
+        <div className="compare__grid">
+          {renderPane(
+            'left',
+            left,
+            leftData,
+            leftDirty,
+            canUndoLeft,
+            canRedoLeft,
+            undoLeft,
+            redoLeft,
+          )}
+          {renderPane(
+            'right',
+            right,
+            rightData,
+            rightDirty,
+            canUndoRight,
+            canRedoRight,
+            undoRight,
+            redoRight,
+          )}
+        </div>
+        <aside className="compare__inspector">
+          <div className="compare__inspector-head">
+            <h3>Laageigenschappen</h3>
+            <p className="muted">
+              Actieve kant: {activeEditor === 'left' ? 'links' : 'rechts'}
+              {editorMeta.item ? ` · ${editorMeta.item.title}` : ''}
+            </p>
+          </div>
+          <LayerEditor
+            layer={editorLayer}
+            onChange={(next) => updateSelectedLayer(activeEditor, next)}
+          />
+        </aside>
       </div>
+
+      <MapPreview
+        open={Boolean(previewSide)}
+        title={previewMeta.item?.title || 'Webmap preview'}
+        itemId={previewMeta.itemId || undefined}
+        portalHomeUrl={portalUrl}
+        webMapData={previewData}
+        dirty={previewDirty}
+        token={auth?.token}
+        onClose={() => setPreviewSide(null)}
+      />
     </div>
   )
 }
