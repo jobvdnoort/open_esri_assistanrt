@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import type { OperationalLayer } from '../types/arcgis'
 import {
   buildLayerTree,
+  countDescendants,
   getLayerAtPath,
   insertLayer,
   moveLayer,
@@ -97,5 +98,10 @@ describe('webmap helpers', () => {
   it('does not move a group into itself', () => {
     const next = moveLayer(sample, [0], [0, 0], 'into')
     expect(next).toEqual(sample)
+  })
+
+  it('counts descendants inside a group', () => {
+    expect(countDescendants(sample[0])).toEqual({ layers: 2, groups: 0 })
+    expect(countDescendants(sample[1])).toEqual({ layers: 0, groups: 0 })
   })
 })

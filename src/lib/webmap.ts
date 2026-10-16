@@ -214,6 +214,12 @@ export function countLayers(layers: OperationalLayer[] = []): { layers: number; 
   return { layers: layerCount, groups: groupCount }
 }
 
+/** Count nested layers/groups under a node (excluding the node itself). */
+export function countDescendants(layer: OperationalLayer): { layers: number; groups: number } {
+  if (!isGroupLayer(layer)) return { layers: 0, groups: 0 }
+  return countLayers(layer.layers ?? [])
+}
+
 export function ensureWebMapShape(data: unknown): WebMapData {
   if (!data || typeof data !== 'object') {
     return { operationalLayers: [], version: '2.31' }

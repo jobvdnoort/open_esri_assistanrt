@@ -101,6 +101,15 @@ p {
   background: #0a665d;
 }
 
+.btn--danger {
+  background: var(--danger);
+  color: white;
+}
+
+.btn--danger:not(:disabled):hover {
+  background: #912018;
+}
+
 .btn--secondary {
   background: var(--surface-2);
   border-color: var(--line);
@@ -831,6 +840,64 @@ p {
   background: #fff4ec;
   color: #7a3b12;
   font-size: 0.82rem;
+}
+
+.layer-row__delete {
+  color: var(--danger);
+  margin-right: 0.25rem;
+}
+
+.layer-row__delete:hover {
+  background: #fdeceb;
+}
+
+.confirm-dialog {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  display: grid;
+  place-items: center;
+  padding: 1.25rem;
+  background: rgba(15, 42, 51, 0.45);
+  animation: rise 0.18s ease both;
+}
+
+.confirm-dialog__panel {
+  width: min(440px, 100%);
+  background: var(--surface-2);
+  border-radius: 16px;
+  padding: 1.25rem;
+  box-shadow: var(--shadow);
+  display: grid;
+  gap: 0.9rem;
+}
+
+.confirm-dialog__icon {
+  width: 40px;
+  height: 40px;
+  border-radius: 12px;
+  display: grid;
+  place-items: center;
+  background: #fdeceb;
+  color: var(--danger);
+}
+
+.confirm-dialog__body h3 {
+  font-size: 1.15rem;
+  margin-bottom: 0.35rem;
+}
+
+.confirm-dialog__body p {
+  color: var(--muted);
+  line-height: 1.45;
+  font-size: 0.92rem;
+}
+
+.confirm-dialog__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.5rem;
+  flex-wrap: wrap;
 }
 
 /* Compare */

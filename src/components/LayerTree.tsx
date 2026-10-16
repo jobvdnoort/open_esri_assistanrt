@@ -10,10 +10,12 @@ import {
   FolderInput,
   Layers,
   Move,
+  Trash2,
 } from 'lucide-react'
 import { useState, type DragEvent } from 'react'
 import type { LayerNode, LayerPath, OperationalLayer } from '../types/arcgis'
-import { buildLayerTree, canReorder, pathsEqual } from '../lib/webmap'
+import { buildLayerTree, canReorder, countDescendants, pathsEqual } from '../lib/webmap'
+import { ConfirmDialog } from './ConfirmDialog'
 
 export type DropPosition = 'into' | 'before' | 'after'
 
@@ -28,6 +30,7 @@ interface LayerTreeProps {
   enableReorder?: boolean
   onReorder?: (path: LayerPath, direction: -1 | 1) => void
   onMove?: (from: LayerPath, to: LayerPath | null, position: DropPosition | 'root') => void
+  onDelete?: (path: LayerPath) => void
 }
 
 function pathKey(path: LayerPath) {
@@ -46,6 +49,7 @@ function NodeRow({
   enableReorder,
   onReorder,
   onMove,
+  onDelete,
   draggingPath,
   setDraggingPath,
   dropTarget,
@@ -62,6 +66,7 @@ function NodeRow({
   enableReorder?: boolean
   onReorder?: (path: LayerPath, direction: -1 | 1) => void
   onMove?: (from: LayerPath, to: LayerPath | null, position: DropPosition | 'root') => void
+  onDelete?: (path: LayerPath) => void
   draggingPath: LayerPath | null
   setDraggingPath: (path: LayerPath | null) => void
   dropTarget: { path: LayerPath; position: DropPosition } | null
@@ -223,6 +228,17 @@ function NodeRow({
             <span>{copyLabel ?? 'Kopieer'}</span>
           </button>
         )}
+
+        {onDelete && (
+          <button
+            type="button"
+            className="btn btn--ghost btn--icon layer-row__delete"
+            onClick={() => onDelete(node.path)}
+            title={node.isGroup ? 'Groep verwijderen' : 'Laag / service verwijderen'}
+          >
+            <Trash2 size={14} />
+          </button>
+        )}
       </div>
 
       {node.isGroup && isOpen && node.children.length > 0 && (
@@ -241,6 +257,7 @@ function NodeRow({
               enableReorder={enableReorder}
               onReorder={onReorder}
               onMove={onMove}
+              onDelete={onDelete}
               draggingPath={draggingPath}
               setDraggingPath={setDraggingPath}
               dropTarget={dropTarget}
@@ -263,6 +280,7 @@ export function LayerTree({
   enableReorder,
   onReorder,
   onMove,
+  onDelete,
 }: LayerTreeProps) {
   const tree = buildLayerTree(layers)
   const [expanded, setExpanded] = useState<Set<string>>(() => {
@@ -276,6 +294,22 @@ export function LayerTree({
   const [dropTarget, setDropTarget] = useState<{ path: LayerPath; position: DropPosition } | null>(
     null,
   )
+  const [pendingDelete, setPendingDelete] = useState<LayerPath | null>(null)
+
+  const pendingLayer = pendingDelete ? getLayerFromTree(tree, pendingDelete) : null
+  const pendingDesc =
+    pendingLayer && pendingLayer.isGroup
+      ? countDescendants(pendingLayer.layer)
+      : { layers: 0, groups: 0 }
+
+  const requestDelete = (path: LayerPath) => {
+    setPendingDelete(path)
+  }
+
+  const confirmDelete = () => {
+    if (pendingDelete && onDelete) onDelete(pendingDelete)
+    setPendingDelete(null)
+  }
 
   const onToggle = (key: string) => {
     setExpanded((prev) => {
@@ -289,6 +323,16 @@ export function LayerTree({
   if (tree.length === 0) {
     return <p className="muted empty-panel">{emptyLabel}</p>
   }
+
+  const deleteTitle = pendingLayer?.isGroup ? 'Groep verwijderen?' : 'Laag / service verwijderen?'
+  const deleteName = pendingLayer?.layer.title || pendingLayer?.layer.id || 'dit item'
+  const nestedSummary =
+    pendingDesc.layers + pendingDesc.groups > 0
+      ? ` Dit verwijdert ook ${pendingDesc.layers} onderliggende laag${pendingDesc.layers === 1 ? '' : 'en'} en ${pendingDesc.groups} geneste groep${pendingDesc.groups === 1 ? '' : 'en'}.`
+      : ''
+  const deleteMessage = pendingLayer?.isGroup
+    ? `Weet je zeker dat je de groep “${deleteName}” wilt verwijderen?${nestedSummary} Dit wordt pas definitief na Opslaan.`
+    : `Weet je zeker dat je “${deleteName}” (${pendingLayer?.layer.layerType || 'laag'}) wilt verwijderen uit deze webmap? De service zelf in het portaal blijft bestaan. Dit wordt pas definitief na Opslaan.`
 
   return (
     <div className="layer-tree">
@@ -337,6 +381,7 @@ export function LayerTree({
             enableReorder={enableReorder}
             onReorder={onReorder}
             onMove={onMove}
+            onDelete={onDelete ? requestDelete : undefined}
             draggingPath={draggingPath}
             setDraggingPath={setDraggingPath}
             dropTarget={dropTarget}
@@ -344,6 +389,27 @@ export function LayerTree({
           />
         ))}
       </ul>
+
+      <ConfirmDialog
+        open={Boolean(pendingDelete && pendingLayer)}
+        title={deleteTitle}
+        message={deleteMessage}
+        confirmLabel="Ja, verwijderen"
+        cancelLabel="Annuleren"
+        onConfirm={confirmDelete}
+        onCancel={() => setPendingDelete(null)}
+      />
     </div>
   )
+}
+
+function getLayerFromTree(nodes: LayerNode[], path: LayerPath): LayerNode | null {
+  let list = nodes
+  let found: LayerNode | null = null
+  for (const index of path) {
+    found = list[index] ?? null
+    if (!found) return null
+    list = found.children
+  }
+  return found
 }

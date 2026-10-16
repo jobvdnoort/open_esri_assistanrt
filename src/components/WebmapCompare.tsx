@@ -14,6 +14,7 @@ import {
   getLayerAtPath,
   insertLayer,
   moveLayer,
+  removeLayerAtPath,
   reorderSibling,
 } from '../lib/webmap'
 import { JsonViewer } from './JsonViewer'
@@ -195,6 +196,28 @@ export function WebmapCompare({ initialLeftId, initialRightId, onBack }: WebmapC
     })
   }
 
+  const deleteWithin = (side: 'left' | 'right', path: LayerPath) => {
+    const setter = side === 'left' ? setLeft : setRight
+    setter((prev) => {
+      if (!prev.data) return prev
+      const layers = prev.data.operationalLayers ?? []
+      const source = getLayerAtPath(layers, path)
+      const nextLayers = removeLayerAtPath(layers, path)
+      const name = source?.title || source?.id || 'item'
+      const kind =
+        source?.layerType === 'GroupLayer' || Array.isArray(source?.layers) ? 'Groep' : 'Laag'
+      queueMicrotask(() =>
+        setStatus(`${kind} “${name}” verwijderd uit deze webmap. Vergeet niet op te slaan.`),
+      )
+      return {
+        ...prev,
+        data: { ...prev.data, operationalLayers: nextLayers },
+        selected: null,
+        dirty: true,
+      }
+    })
+  }
+
   const saveSide = async (side: 'left' | 'right') => {
     const pane = side === 'left' ? left : right
     const setter = side === 'left' ? setLeft : setRight
@@ -284,6 +307,7 @@ export function WebmapCompare({ initialLeftId, initialRightId, onBack }: WebmapC
               enableReorder
               onReorder={(path, direction) => reorderWithin(side, path, direction)}
               onMove={(from, to, position) => moveWithin(side, from, to, position)}
+              onDelete={(path) => deleteWithin(side, path)}
             />
             <button
               type="button"
