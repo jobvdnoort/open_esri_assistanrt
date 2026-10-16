@@ -18,9 +18,9 @@
   --ok: #35ac46;
   --shadow: 0 2px 8px rgba(0, 0, 0, 0.12);
   --radius: 4px;
-  --font-display: 'Source Sans 3', 'Avenir Next', 'Segoe UI', sans-serif;
-  --font-body: 'Source Sans 3', 'Avenir Next', 'Segoe UI', sans-serif;
-  --font-mono: 'IBM Plex Mono', ui-monospace, monospace;
+  --font-display: 'Avenir Next', 'Segoe UI', 'Helvetica Neue', sans-serif;
+  --font-body: 'Avenir Next', 'Segoe UI', 'Helvetica Neue', sans-serif;
+  --font-mono: ui-monospace, 'Cascadia Mono', 'Segoe UI Mono', monospace;
 }
 
 * {

@@ -1,20 +1,35 @@
 import { ArrowRightLeft, FolderOpen, LogOut, MapPinned } from 'lucide-react'
-import { useState } from 'react'
-import { ItemDetail } from './components/ItemDetail'
+import { lazy, Suspense, useState } from 'react'
 import { LoginPage } from './components/LoginPage'
-import { PortalBrowser } from './components/PortalBrowser'
-import { WebmapCompare } from './components/WebmapCompare'
 import { useAuth } from './context/AuthContext'
 import type { PortalItem } from './types/arcgis'
 import './App.css'
+
+const PortalBrowser = lazy(() =>
+  import('./components/PortalBrowser').then((m) => ({ default: m.PortalBrowser })),
+)
+const ItemDetail = lazy(() =>
+  import('./components/ItemDetail').then((m) => ({ default: m.ItemDetail })),
+)
+const WebmapCompare = lazy(() =>
+  import('./components/WebmapCompare').then((m) => ({ default: m.WebmapCompare })),
+)
 
 type View =
   | { name: 'browser' }
   | { name: 'item'; itemId: string }
   | { name: 'compare'; leftId?: string; rightId?: string }
 
+function ViewFallback() {
+  return (
+    <div className="boot boot--inline">
+      <p>Laden…</p>
+    </div>
+  )
+}
+
 export default function App() {
-  const { mode, portal, loading, signOut } = useAuth()
+  const { mode, portal, loading, signOut, error } = useAuth()
   const [view, setView] = useState<View>({ name: 'browser' })
 
   if (loading && !mode) {
@@ -27,7 +42,16 @@ export default function App() {
   }
 
   if (!mode) {
-    return <LoginPage />
+    return (
+      <>
+        {error && (
+          <div className="boot-banner">
+            <p className="form-error">{error}</p>
+          </div>
+        )}
+        <LoginPage />
+      </>
+    )
   }
 
   const userLabel = portal?.user?.fullName || portal?.user?.username || 'Gebruiker'
@@ -84,28 +108,30 @@ export default function App() {
       </div>
 
       <main className="shell__main">
-        {view.name === 'browser' && (
-          <PortalBrowser
-            onOpenItem={(item: PortalItem) => setView({ name: 'item', itemId: item.id })}
-            onCompareMaps={(leftId, rightId) =>
-              setView({ name: 'compare', leftId, rightId })
-            }
-          />
-        )}
-        {view.name === 'item' && (
-          <ItemDetail
-            itemId={view.itemId}
-            onBack={() => setView({ name: 'browser' })}
-            onCompare={(id) => setView({ name: 'compare', leftId: id })}
-          />
-        )}
-        {view.name === 'compare' && (
-          <WebmapCompare
-            initialLeftId={view.leftId}
-            initialRightId={view.rightId}
-            onBack={() => setView({ name: 'browser' })}
-          />
-        )}
+        <Suspense fallback={<ViewFallback />}>
+          {view.name === 'browser' && (
+            <PortalBrowser
+              onOpenItem={(item: PortalItem) => setView({ name: 'item', itemId: item.id })}
+              onCompareMaps={(leftId, rightId) =>
+                setView({ name: 'compare', leftId, rightId })
+              }
+            />
+          )}
+          {view.name === 'item' && (
+            <ItemDetail
+              itemId={view.itemId}
+              onBack={() => setView({ name: 'browser' })}
+              onCompare={(id) => setView({ name: 'compare', leftId: id })}
+            />
+          )}
+          {view.name === 'compare' && (
+            <WebmapCompare
+              initialLeftId={view.leftId}
+              initialRightId={view.rightId}
+              onBack={() => setView({ name: 'browser' })}
+            />
+          )}
+        </Suspense>
       </main>
     </div>
   )

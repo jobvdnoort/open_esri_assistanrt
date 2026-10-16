@@ -1,7 +1,7 @@
 import { Compass, KeyRound, MapPinned, Shield } from 'lucide-react'
 import { useState, type FormEvent } from 'react'
 import { useAuth } from '../context/AuthContext'
-import { getOAuthRedirectUri } from '../lib/portal'
+import { getOAuthRedirectUri } from '../lib/portalAuth'
 
 type Tab = 'oauth' | 'password' | 'token'
 
